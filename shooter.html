@@ -62,6 +62,104 @@ canvas.addEventListener('mousedown', e => { if (e.button===0){ input.down=true; 
 canvas.addEventListener('mouseup',   e => { if (e.button===0) input.down=false; });
 window.addEventListener('keypress',  e => { input.clicked = true; });
 
+// ─── AUDIO ───────────────────────────────────────────────────────────────────
+const sfx = (() => {
+  let ac = null;
+  function ctx() {
+    if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+    if (ac.state === 'suspended') ac.resume();
+    return ac;
+  }
+
+  function osc(type, freq, endFreq, duration, vol, startTime) {
+    const c = ctx(), t = startTime ?? c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + duration);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    o.connect(g); g.connect(c.destination);
+    o.start(t); o.stop(t + duration + 0.01);
+  }
+
+  function noise(duration, vol, filterFreq, filterType, startTime) {
+    const c = ctx(), t = startTime ?? c.currentTime;
+    const len = Math.ceil(c.sampleRate * duration);
+    const buf = c.createBuffer(1, len, c.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource(), g = c.createGain();
+    const filt = c.createBiquadFilter();
+    filt.type = filterType || 'bandpass';
+    filt.frequency.value = filterFreq || 800;
+    filt.Q.value = 1.2;
+    src.buffer = buf;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    src.connect(filt); filt.connect(g); g.connect(c.destination);
+    src.start(t); src.stop(t + duration + 0.01);
+  }
+
+  return {
+    shoot() {
+      // Sharp laser pew — square wave sweep down
+      osc('square', 1100, 180, 0.09, 0.12);
+      noise(0.04, 0.06, 2000, 'highpass');
+    },
+    enemyShoot() {
+      // Lower, grittier pew
+      osc('sawtooth', 600, 120, 0.1, 0.08);
+      noise(0.05, 0.04, 900, 'bandpass');
+    },
+    enemyHit() {
+      // Short crack/thwack
+      noise(0.06, 0.25, 1200, 'bandpass');
+      osc('square', 300, 80, 0.06, 0.06);
+    },
+    explosion(large) {
+      // Rumble burst — layered noise
+      noise(large ? 0.55 : 0.35, large ? 0.6 : 0.4, 120, 'lowpass');
+      noise(large ? 0.4  : 0.25, large ? 0.3 : 0.2, 350, 'bandpass');
+      osc('sawtooth', large ? 120 : 180, 30, large ? 0.5 : 0.3, large ? 0.2 : 0.12);
+    },
+    playerHit() {
+      // Heavy low thud
+      noise(0.12, 0.35, 200, 'lowpass');
+      osc('sine', 220, 60, 0.15, 0.18);
+    },
+    playerDeath() {
+      // Big explosion + descending wail
+      noise(0.8, 0.7, 100, 'lowpass');
+      noise(0.5, 0.35, 400, 'bandpass');
+      osc('sawtooth', 440, 55, 0.9, 0.25);
+      osc('square',   220, 40, 0.7, 0.15);
+    },
+    levelComplete() {
+      // Ascending arpeggio: C E G C (major chord sweep)
+      const c = ctx(), now = c.currentTime;
+      [[523,0],[659,0.12],[784,0.24],[1047,0.36]].forEach(([f,delay]) => {
+        osc('square', f, f*0.98, 0.18, 0.12, now+delay);
+      });
+      // Shimmery tail
+      osc('sine', 1047, 880, 0.4, 0.08, now+0.5);
+    },
+    gameOver() {
+      // Descending sad tones
+      const c = ctx(), now = c.currentTime;
+      [[392,0],[349,0.2],[330,0.4],[262,0.65]].forEach(([f,delay]) => {
+        osc('square', f, f*0.95, 0.28, 0.1, now+delay);
+        osc('sine',   f, f*0.95, 0.35, 0.06, now+delay);
+      });
+    },
+    enemySpawn() {
+      // Subtle whoosh
+      noise(0.2, 0.08, 600, 'bandpass');
+      osc('sine', 80, 200, 0.15, 0.07);
+    },
+  };
+})();
+
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function rand(min, max) { return min + Math.random() * (max - min); }
@@ -248,6 +346,7 @@ class Player {
   shoot() {
     this.shootCooldown = SHOOT_RATE;
     this.muzzleFlashTimer = MUZZLE_TIME;
+    sfx.shoot();
     const tipX = this.x + Math.cos(this.angle)*22;
     const tipY = this.y + Math.sin(this.angle)*22;
     bullets.push(new Bullet(tipX, tipY, Math.cos(this.angle)*BULLET_SPEED, Math.sin(this.angle)*BULLET_SPEED, true));
@@ -262,7 +361,8 @@ class Player {
     this.health -= dmg;
     this.invincibleTimer = INVINCIBLE_TIME;
     this.hitFlashTimer   = HIT_FLASH_TIME;
-    if (this.health <= 0) { this.health=0; this.alive=false; spawnDeathParticles(this.x,this.y,'player'); }
+    if (this.health <= 0) { this.health=0; this.alive=false; spawnDeathParticles(this.x,this.y,'player'); sfx.playerDeath(); }
+    else { sfx.playerHit(); }
   }
   draw(ctx) {
     ctx.save();
@@ -376,6 +476,7 @@ class Enemy {
               this.x+Math.cos(a)*20, this.y+Math.sin(a)*20,
               Math.cos(a)*ENEMY_BULLET_SPEED, Math.sin(a)*ENEMY_BULLET_SPEED, false
             ));
+            sfx.enemyShoot();
           }
           return;
         } else { this.state='chase'; }
@@ -397,6 +498,9 @@ class Enemy {
       spawnDeathParticles(this.x,this.y,this.type);
       scorePopups.push(new ScorePopup(this.x,this.y-20,this.score));
       gameState.score+=this.score;
+      sfx.explosion(this.type==='tank');
+    } else {
+      sfx.enemyHit();
     }
   }
   draw(ctx) {
@@ -653,6 +757,7 @@ function update(dt) {
     const pos=spawnEdgePos();
     enemies.push(new Enemy(pos.x,pos.y,type));
     gameState.spawnTimer=gameState.spawnDelay;
+    sfx.enemySpawn();
   }
 
   player.update(dt);
@@ -677,6 +782,7 @@ function update(dt) {
       localStorage.setItem('rogue_hs',gameState.highScore);
     }
     gameState.current='gameOver';
+    sfx.gameOver();
   }
 
   const allDead = enemies.every(e=>!e.alive) && gameState.spawnQueue.length===0;
@@ -689,6 +795,7 @@ function update(dt) {
       gameState.current='levelComplete';
       gameState.levelCompleteTimer=4.0;
       gameState.overlayAlpha=0;
+      sfx.levelComplete();
     }
   } else {
     gameState._levelEndTimer=undefined;
