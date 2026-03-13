@@ -15,7 +15,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
+      min-height: 100vh
     }
 
     h1 {
@@ -120,6 +120,62 @@
   <button id="reset">New Game</button>
 
   <script>
+    // --- Audio (Web Audio API, procedural) ---
+    const sfx = (() => {
+      let ctx = null;
+      function getCtx() {
+        if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+        return ctx;
+      }
+
+      function place(isX) {
+        const c = getCtx();
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.connect(gain); gain.connect(c.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(isX ? 440 : 330, c.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(isX ? 520 : 260, c.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.3, c.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.15);
+        osc.start(c.currentTime);
+        osc.stop(c.currentTime + 0.15);
+      }
+
+      function win() {
+        const c = getCtx();
+        const notes = [523, 659, 784, 1047];
+        notes.forEach((freq, i) => {
+          const osc = c.createOscillator();
+          const gain = c.createGain();
+          osc.connect(gain); gain.connect(c.destination);
+          osc.type = 'triangle';
+          const t = c.currentTime + i * 0.12;
+          osc.frequency.setValueAtTime(freq, t);
+          gain.gain.setValueAtTime(0.3, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+          osc.start(t);
+          osc.stop(t + 0.3);
+        });
+      }
+
+      function draw() {
+        const c = getCtx();
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.connect(gain); gain.connect(c.destination);
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, c.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(110, c.currentTime + 0.4);
+        gain.gain.setValueAtTime(0.2, c.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.4);
+        osc.start(c.currentTime);
+        osc.stop(c.currentTime + 0.4);
+      }
+
+      return { place, win, draw };
+    })();
+
     const WINS = [
       [0,1,2],[3,4,5],[6,7,8],
       [0,3,6],[1,4,7],[2,5,8],
@@ -161,6 +217,7 @@
         board[i] = current;
         cell.textContent = current;
         cell.classList.add(current.toLowerCase(), 'taken');
+        sfx.place(current === 'X');
 
         const result = checkWinner();
         if (result) {
@@ -169,9 +226,11 @@
             result.line.forEach(idx => cells[idx].classList.add('win'));
             status.textContent = `${result.winner} wins!`;
             scores[result.winner]++;
+            sfx.win();
           } else {
             status.textContent = "It's a draw!";
             scores.draw++;
+            sfx.draw();
           }
           document.getElementById('scoreX').textContent = scores.X;
           document.getElementById('scoreO').textContent = scores.O;
