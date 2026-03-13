@@ -6,7 +6,6 @@
   <title>Tic Tac Toe</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       font-family: 'Segoe UI', sans-serif;
       background: #1a1a2e;
@@ -15,30 +14,16 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 100vh
+      min-height: 100vh;
     }
-
-    h1 {
-      font-size: 2.5rem;
-      margin-bottom: 1rem;
-      letter-spacing: 2px;
-      color: #e94560;
-    }
-
-    #status {
-      font-size: 1.2rem;
-      margin-bottom: 1.5rem;
-      height: 1.5em;
-      color: #a8dadc;
-    }
-
+    h1 { font-size: 2.5rem; margin-bottom: 1rem; letter-spacing: 2px; color: #e94560; }
+    #status { font-size: 1.2rem; margin-bottom: 1.5rem; height: 1.5em; color: #a8dadc; }
     #board {
       display: grid;
       grid-template-columns: repeat(3, 120px);
       grid-template-rows: repeat(3, 120px);
       gap: 8px;
     }
-
     .cell {
       background: #16213e;
       border-radius: 12px;
@@ -51,20 +36,11 @@
       transition: background 0.15s, transform 0.1s;
       user-select: none;
     }
-
-    .cell:hover:not(.taken) {
-      background: #0f3460;
-      transform: scale(1.05);
-    }
-
+    .cell:hover:not(.taken):not(.disabled) { background: #0f3460; transform: scale(1.05); }
     .cell.x { color: #e94560; }
     .cell.o { color: #a8dadc; }
-
-    .cell.win {
-      background: #0f3460;
-      box-shadow: 0 0 16px 4px rgba(168, 218, 220, 0.4);
-    }
-
+    .cell.win { background: #0f3460; box-shadow: 0 0 16px 4px rgba(168,218,220,0.4); }
+    .cell.disabled { cursor: default; }
     #reset {
       margin-top: 2rem;
       padding: 0.6rem 2rem;
@@ -76,26 +52,53 @@
       cursor: pointer;
       transition: background 0.2s;
     }
-
     #reset:hover { background: #c73652; }
-
-    #score {
-      display: flex;
-      gap: 2rem;
-      margin-bottom: 1.5rem;
-      font-size: 1rem;
-      color: #aaa;
-    }
-
+    #reset:disabled { background: #555; cursor: default; }
+    #score { display: flex; gap: 2rem; margin-bottom: 1.5rem; font-size: 1rem; color: #aaa; }
     #score span { text-align: center; }
     #score strong { display: block; font-size: 1.6rem; }
     .score-x strong { color: #e94560; }
     .score-o strong { color: #a8dadc; }
     .score-draw strong { color: #aaa; }
+    #lobby { display: flex; flex-direction: column; align-items: center; gap: 0.7rem; margin-bottom: 1.2rem; }
+    #lobby.hidden { display: none; }
+    #link-box { display: none; gap: 8px; align-items: center; }
+    #link-input {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      color: #eee;
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      width: 300px;
+    }
+    #copy-btn {
+      padding: 0.4rem 1rem;
+      font-size: 0.85rem;
+      border: none;
+      border-radius: 6px;
+      background: #0f3460;
+      color: #eee;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #copy-btn:hover { background: #1a4a8a; }
+    #copy-btn.copied { background: #2a7a4a; }
+    #conn-status { font-size: 0.9rem; color: #aaa; }
+    #conn-status.connected { color: #4caf50; }
+    #conn-status.error { color: #e94560; }
   </style>
 </head>
 <body>
   <h1>Tic Tac Toe</h1>
+
+  <div id="lobby">
+    <div id="conn-status">Connecting...</div>
+    <div id="link-box">
+      <input id="link-input" readonly>
+      <button id="copy-btn">Copy link</button>
+    </div>
+  </div>
 
   <div id="score">
     <span class="score-x">X Wins<strong id="scoreX">0</strong></span>
@@ -103,7 +106,7 @@
     <span class="score-o">O Wins<strong id="scoreO">0</strong></span>
   </div>
 
-  <div id="status">X's turn</div>
+  <div id="status">Waiting...</div>
 
   <div id="board">
     <div class="cell" data-i="0"></div>
@@ -117,134 +120,207 @@
     <div class="cell" data-i="8"></div>
   </div>
 
-  <button id="reset">New Game</button>
+  <button id="reset" disabled>New Game</button>
 
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script>
-    // --- Audio (Web Audio API, procedural) ---
+    // --- Audio ---
     const sfx = (() => {
       let ctx = null;
       function getCtx() {
         if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
         return ctx;
       }
-
       function place(isX) {
         const c = getCtx();
-        const osc = c.createOscillator();
-        const gain = c.createGain();
+        const osc = c.createOscillator(), gain = c.createGain();
         osc.connect(gain); gain.connect(c.destination);
         osc.type = 'sine';
         osc.frequency.setValueAtTime(isX ? 440 : 330, c.currentTime);
         osc.frequency.exponentialRampToValueAtTime(isX ? 520 : 260, c.currentTime + 0.08);
         gain.gain.setValueAtTime(0.3, c.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.15);
-        osc.start(c.currentTime);
-        osc.stop(c.currentTime + 0.15);
+        osc.start(c.currentTime); osc.stop(c.currentTime + 0.15);
       }
-
       function win() {
         const c = getCtx();
-        const notes = [523, 659, 784, 1047];
-        notes.forEach((freq, i) => {
-          const osc = c.createOscillator();
-          const gain = c.createGain();
+        [523, 659, 784, 1047].forEach((freq, i) => {
+          const osc = c.createOscillator(), gain = c.createGain();
           osc.connect(gain); gain.connect(c.destination);
           osc.type = 'triangle';
           const t = c.currentTime + i * 0.12;
           osc.frequency.setValueAtTime(freq, t);
           gain.gain.setValueAtTime(0.3, t);
           gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-          osc.start(t);
-          osc.stop(t + 0.3);
+          osc.start(t); osc.stop(t + 0.3);
         });
       }
-
       function draw() {
         const c = getCtx();
-        const osc = c.createOscillator();
-        const gain = c.createGain();
+        const osc = c.createOscillator(), gain = c.createGain();
         osc.connect(gain); gain.connect(c.destination);
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(220, c.currentTime);
         osc.frequency.exponentialRampToValueAtTime(110, c.currentTime + 0.4);
         gain.gain.setValueAtTime(0.2, c.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.4);
-        osc.start(c.currentTime);
-        osc.stop(c.currentTime + 0.4);
+        osc.start(c.currentTime); osc.stop(c.currentTime + 0.4);
       }
-
       return { place, win, draw };
     })();
 
+    // --- Constants ---
     const WINS = [
       [0,1,2],[3,4,5],[6,7,8],
       [0,3,6],[1,4,7],[2,5,8],
       [0,4,8],[2,4,6]
     ];
 
+    // --- State ---
     let board, current, gameOver;
     let scores = { X: 0, O: 0, draw: 0 };
+    let myRole = null;
+    let conn = null;
+    let connected = false;
 
     const cells = document.querySelectorAll('.cell');
-    const status = document.getElementById('status');
+    const statusEl = document.getElementById('status');
+    const connStatusEl = document.getElementById('conn-status');
+    const resetBtn = document.getElementById('reset');
 
-    function init() {
+    function setConnStatus(msg, cls) {
+      connStatusEl.textContent = msg;
+      connStatusEl.className = cls || '';
+    }
+
+    function updateStatus() {
+      if (!connected) { statusEl.textContent = 'Waiting for opponent...'; return; }
+      if (gameOver) return;
+      statusEl.textContent = current === myRole
+        ? 'Your turn (' + myRole + ')'
+        : "Opponent's turn (" + current + ')';
+    }
+
+    function init(broadcast) {
       board = Array(9).fill(null);
       current = 'X';
       gameOver = false;
-      cells.forEach(c => {
-        c.textContent = '';
-        c.className = 'cell';
-      });
-      status.textContent = "X's turn";
+      cells.forEach(c => { c.textContent = ''; c.className = 'cell'; });
+      updateStatus();
+      if (broadcast && conn) conn.send({ type: 'restart' });
     }
 
     function checkWinner() {
-      for (const [a, b, c] of WINS) {
-        if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      for (const [a, b, c] of WINS)
+        if (board[a] && board[a] === board[b] && board[a] === board[c])
           return { winner: board[a], line: [a, b, c] };
-        }
-      }
       if (board.every(Boolean)) return { winner: null, draw: true };
       return null;
     }
 
+    function applyMove(i) {
+      if (gameOver || board[i]) return false;
+      board[i] = current;
+      cells[i].textContent = current;
+      cells[i].classList.add(current.toLowerCase(), 'taken');
+      sfx.place(current === 'X');
+
+      const result = checkWinner();
+      if (result) {
+        gameOver = true;
+        if (result.winner) {
+          result.line.forEach(idx => cells[idx].classList.add('win'));
+          statusEl.textContent = result.winner === myRole ? 'You win!' : 'Opponent wins!';
+          scores[result.winner]++;
+          sfx.win();
+        } else {
+          statusEl.textContent = "It's a draw!";
+          scores.draw++;
+          sfx.draw();
+        }
+        document.getElementById('scoreX').textContent = scores.X;
+        document.getElementById('scoreO').textContent = scores.O;
+        document.getElementById('scoreDraw').textContent = scores.draw;
+        resetBtn.disabled = false;
+      } else {
+        current = current === 'X' ? 'O' : 'X';
+        updateStatus();
+      }
+      return true;
+    }
+
     cells.forEach(cell => {
       cell.addEventListener('click', () => {
+        if (!connected || gameOver || current !== myRole) return;
         const i = +cell.dataset.i;
-        if (gameOver || board[i]) return;
-
-        board[i] = current;
-        cell.textContent = current;
-        cell.classList.add(current.toLowerCase(), 'taken');
-        sfx.place(current === 'X');
-
-        const result = checkWinner();
-        if (result) {
-          gameOver = true;
-          if (result.winner) {
-            result.line.forEach(idx => cells[idx].classList.add('win'));
-            status.textContent = `${result.winner} wins!`;
-            scores[result.winner]++;
-            sfx.win();
-          } else {
-            status.textContent = "It's a draw!";
-            scores.draw++;
-            sfx.draw();
-          }
-          document.getElementById('scoreX').textContent = scores.X;
-          document.getElementById('scoreO').textContent = scores.O;
-          document.getElementById('scoreDraw').textContent = scores.draw;
-        } else {
-          current = current === 'X' ? 'O' : 'X';
-          status.textContent = `${current}'s turn`;
-        }
+        if (board[i]) return;
+        applyMove(i);
+        if (conn) conn.send({ type: 'move', index: i });
       });
     });
 
-    document.getElementById('reset').addEventListener('click', init);
+    resetBtn.addEventListener('click', () => {
+      if (!connected) return;
+      init(true);
+      resetBtn.disabled = true;
+    });
 
-    init();
+    // --- PeerJS ---
+    const joinId = new URLSearchParams(location.search).get('join');
+    const peer = new Peer();
+
+    peer.on('error', err => setConnStatus('Connection error: ' + err.type, 'error'));
+
+    function setupConn(c) {
+      conn = c;
+      conn.on('open', () => {
+        connected = true;
+        document.getElementById('lobby').classList.add('hidden');
+        resetBtn.disabled = false;
+        init(false);
+      });
+      conn.on('data', msg => {
+        if (msg.type === 'move') applyMove(msg.index);
+        if (msg.type === 'restart') { init(false); resetBtn.disabled = true; }
+      });
+      conn.on('close', () => {
+        connected = false;
+        document.getElementById('lobby').classList.remove('hidden');
+        setConnStatus('Opponent disconnected.', 'error');
+        statusEl.textContent = 'Opponent disconnected.';
+        resetBtn.disabled = true;
+      });
+    }
+
+    if (!joinId) {
+      // HOST (X)
+      myRole = 'X';
+      peer.on('open', id => {
+        const url = location.origin + location.pathname + '?join=' + id;
+        setConnStatus('Share this link with your opponent:');
+        const linkBox = document.getElementById('link-box');
+        const linkInput = document.getElementById('link-input');
+        const copyBtn = document.getElementById('copy-btn');
+        linkInput.value = url;
+        linkBox.style.display = 'flex';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(url).then(() => {
+            copyBtn.textContent = 'Copied!';
+            copyBtn.classList.add('copied');
+            setTimeout(() => { copyBtn.textContent = 'Copy link'; copyBtn.classList.remove('copied'); }, 2000);
+          });
+        });
+        statusEl.textContent = 'Waiting for opponent...';
+      });
+      peer.on('connection', c => setupConn(c));
+    } else {
+      // GUEST (O)
+      myRole = 'O';
+      peer.on('open', () => {
+        setConnStatus('Joining game...');
+        setupConn(peer.connect(joinId, { reliable: true }));
+      });
+    }
   </script>
 </body>
 </html>
