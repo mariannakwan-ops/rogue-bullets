@@ -11,6 +11,16 @@ canvas { cursor: none; display: block; }
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="mp-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#eee;font-family:monospace">
+  <div style="font-size:2rem;color:#e94560;letter-spacing:2px">MULTIPLAYER</div>
+  <div id="mp-status" style="color:#a8dadc;font-size:1rem">Connecting...</div>
+  <div id="mp-link-row" style="display:none;gap:8px;align-items:center">
+    <input id="mp-link" readonly style="background:#16213e;border:1px solid #0f3460;color:#eee;padding:6px 10px;border-radius:6px;font-size:0.85rem;width:340px">
+    <button id="mp-copy" style="padding:6px 14px;border:none;border-radius:6px;background:#0f3460;color:#eee;cursor:pointer">Copy</button>
+  </div>
+  <button id="mp-solo" style="margin-top:8px;padding:8px 24px;border:none;border-radius:8px;background:#555;color:#eee;cursor:pointer;font-size:0.9rem">Play Solo Instead</button>
+</div>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 // ─── CANVAS SETUP ────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
@@ -51,11 +61,10 @@ const input = { keys: {}, mx: W/2, my: H/2, down: false, clicked: false };
 window.addEventListener('keydown', e => {
   input.keys[e.code] = true;
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
-  if (e.code === 'KeyM') lofi.toggle();
+  if (e.code === 'KeyM') music.cycle();
 });
-// Start lofi music on first user interaction
 ['click','keydown'].forEach(ev =>
-  window.addEventListener(ev, () => lofi.start(), { once: true })
+  window.addEventListener(ev, () => music.start(), { once: true })
 );
 window.addEventListener('keyup',   e => { input.keys[e.code] = false; });
 canvas.addEventListener('mousemove', e => {
@@ -66,6 +75,74 @@ canvas.addEventListener('mousemove', e => {
 canvas.addEventListener('mousedown', e => { if (e.button===0){ input.down=true; input.clicked=true; } });
 canvas.addEventListener('mouseup',   e => { if (e.button===0) input.down=false; });
 window.addEventListener('keypress',  e => { input.clicked = true; });
+
+// ─── MULTIPLAYER ─────────────────────────────────────────────────────────────
+const joinId = new URLSearchParams(location.search).get('join');
+let mpMode = 'solo';   // 'solo' | 'host' | 'guest'
+let mpConn = null;
+let mpPeer = null;
+let guestInput = { keys: {}, mx: W/2, my: H/2, down: false }; // host stores guest's input here
+let syncTick = 0;
+
+function mpSetStatus(msg) { document.getElementById('mp-status').textContent = msg; }
+
+function mpSetupConn(conn) {
+  mpConn = conn;
+  conn.on('data', msg => {
+    if (mpMode === 'host' && msg.type === 'input') {
+      guestInput = msg;
+    }
+    if (mpMode === 'guest' && msg.type === 'state') {
+      applyNetState(msg);
+    }
+  });
+  conn.on('close', () => {
+    mpSetStatus('Opponent disconnected.');
+    document.getElementById('mp-overlay').style.display = 'flex';
+  });
+}
+
+function serializeState() {
+  const sp = p => !p ? null : {x:p.x,y:p.y,angle:p.angle,health:p.health,alive:p.alive,
+    walkCycle:p.walkCycle,hitFlashTimer:p.hitFlashTimer,invincibleTimer:p.invincibleTimer,
+    muzzleFlashTimer:p.muzzleFlashTimer,deathTimer:p.deathTimer};
+  return {
+    type:'state',
+    p1: sp(player), p2: sp(player2),
+    enemies: enemies.map(e=>({x:e.x,y:e.y,angle:e.angle,type:e.type,health:e.health,
+      maxHealth:e.maxHealth,alive:e.alive,deathTimer:e.deathTimer,hitFlashTimer:e.hitFlashTimer,
+      wobble:e.wobble,aggroShown:e.aggroShown,state:e.state})),
+    bullets: bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy,fromPlayer:b.fromPlayer,alive:b.alive,trail:b.trail})),
+    gs:{current:gameState.current,level:gameState.level,score:gameState.score,
+        spawnLen:gameState.spawnQueue.length,highScore:gameState.highScore,
+        levelCompleteTimer:gameState.levelCompleteTimer,overlayAlpha:gameState.overlayAlpha}
+  };
+}
+
+function applyNetState(msg) {
+  const ap = (p, data) => {
+    if (!data || !p) return;
+    Object.assign(p, data);
+  };
+  ap(player, msg.p1); ap(player2, msg.p2);
+  // sync enemies
+  while (enemies.length < msg.enemies.length) enemies.push(new Enemy(0,0,'grunt'));
+  enemies.length = msg.enemies.length;
+  msg.enemies.forEach((d,i) => { if (!enemies[i]) enemies[i]=new Enemy(0,0,d.type); Object.assign(enemies[i],d); });
+  // sync bullets
+  while (bullets.length < msg.bullets.length) bullets.push(new Bullet(0,0,0,0,true));
+  bullets.length = msg.bullets.length;
+  msg.bullets.forEach((d,i) => { if (!bullets[i]) bullets[i]=new Bullet(0,0,0,0,d.fromPlayer); Object.assign(bullets[i],d); });
+  // sync game state
+  if (msg.gs) {
+    gameState.current = msg.gs.current;
+    gameState.level   = msg.gs.level;
+    gameState.score   = msg.gs.score;
+    gameState.highScore = msg.gs.highScore;
+    gameState.levelCompleteTimer = msg.gs.levelCompleteTimer;
+    gameState.overlayAlpha = msg.gs.overlayAlpha;
+  }
+}
 
 // ─── AUDIO ───────────────────────────────────────────────────────────────────
 const sfx = (() => {
@@ -165,134 +242,181 @@ const sfx = (() => {
   };
 })();
 
-// ─── LOFI MUSIC ──────────────────────────────────────────────────────────────
-const lofi = (() => {
-  let ac = null, master = null, running = false, muted = false;
-  let schedTimer = null, nextTime = 0, beat = 0, chordIdx = 0;
+// ─── MUSIC (lofi / rock / kpop) ──────────────────────────────────────────────
+const music = (() => {
+  let ac = null, master = null, vinylGain = null;
+  let mode = 'off';
+  const MODES = ['off', 'lofi', 'rock', 'kpop'];
+  let timer = null, nextTime = 0, beat = 0;
+  let lofiCI = 0, rockCI = 0, kpopCI = 0;
 
-  const BPM = 78;
-  const BEAT = 60 / BPM;       // ~0.769 s per beat
-  const BAR  = BEAT * 4;       // ~3.077 s per bar
-  const CHORD_LEN = BAR * 2;   // each chord lasts 2 bars
-
-  // Cmaj7 → Am7 → Fmaj7 → G7
-  const CHORDS = [
-    { notes: [130.81, 164.81, 196.00, 246.94], bass: 65.41 },
-    { notes: [110.00, 130.81, 164.81, 196.00], bass: 55.00 },
-    { notes: [ 87.31, 110.00, 130.81, 164.81], bass: 43.65 },
-    { notes: [ 98.00, 123.47, 146.83, 174.61], bass: 49.00 },
-  ];
-
-  function setup() {
+  function init() {
     ac = new (window.AudioContext || window.webkitAudioContext)();
-    master = ac.createGain();
-    master.gain.value = 0.32;
-    master.connect(ac.destination);
-
-    // Vinyl crackle — looping noise with rare pops
-    const len = Math.ceil(ac.sampleRate * 3);
-    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+    const len = Math.ceil(ac.sampleRate * 3), buf = ac.createBuffer(1, len, ac.sampleRate);
     const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++)
-      d[i] = Math.random() < 0.004
-        ? (Math.random()*2-1) * 0.22
-        : (Math.random()*2-1) * 0.004;
-    const vinyl = ac.createBufferSource();
-    vinyl.buffer = buf; vinyl.loop = true;
-    const vg = ac.createGain(); vg.gain.value = 0.2;
-    vinyl.connect(vg); vg.connect(master);
-    vinyl.start();
+      d[i] = Math.random() < 0.004 ? (Math.random()*2-1)*0.22 : (Math.random()*2-1)*0.004;
+    const vs = ac.createBufferSource(); vs.buffer = buf; vs.loop = true;
+    vinylGain = ac.createGain(); vinylGain.gain.value = 0;
+    vs.connect(vinylGain); vinylGain.connect(master); vs.start();
+  }
+  function ensure() { if (!ac) init(); if (ac.state==='suspended') ac.resume(); }
+  function lpf(hz,q) { const f=ac.createBiquadFilter(); f.type='lowpass'; f.frequency.value=hz; if(q)f.Q.value=q; return f; }
+  function hpf(hz)   { const f=ac.createBiquadFilter(); f.type='highpass'; f.frequency.value=hz; return f; }
+  function disto(amt){ const ws=ac.createWaveShaper(),n=512,c=new Float32Array(n);
+    for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=(Math.PI+amt)*x/(Math.PI+amt*Math.abs(x));}
+    ws.curve=c; ws.oversample='4x'; return ws; }
+  function nb(dur,vol,ft,fhz,t){ // noise burst
+    const len=Math.ceil(ac.sampleRate*dur),buf=ac.createBuffer(1,len,ac.sampleRate),d=buf.getChannelData(0);
+    for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+    const src=ac.createBufferSource(); src.buffer=buf;
+    const f=ac.createBiquadFilter(); f.type=ft; f.frequency.value=fhz;
+    const g=ac.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    src.connect(f); f.connect(g); g.connect(master); src.start(t); src.stop(t+dur+0.01); }
+  function hat(t,open,vol){nb(open?0.12:0.04,vol||0.05,'highpass',8000,t);}
+
+  // ── LOFI ──────────────────────────────────────────────────────────────────
+  const LB=60/78, LCL=LB*8;
+  const LCH=[{notes:[130.81,164.81,196,246.94],bass:65.41},{notes:[110,130.81,164.81,196],bass:55},
+             {notes:[87.31,110,130.81,164.81],bass:43.65},{notes:[98,123.47,146.83,174.61],bass:49}];
+  function lofiTick(t,b) {
+    const sw=(b%2===1)?LB*0.035:0, e8=b%8;
+    if (b%16===0) {
+      LCH[lofiCI].notes.forEach(hz=>[-4,4].forEach(det=>{
+        const o=ac.createOscillator(),g=ac.createGain(),f=lpf(680,0.7);
+        o.type='triangle'; o.frequency.value=hz; o.detune.value=det;
+        g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.052,t+1);
+        g.gain.setValueAtTime(0.052,t+LCL-0.6); g.gain.linearRampToValueAtTime(0,t+LCL);
+        o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t+LCL+0.1);}));
+      const bassHz=LCH[lofiCI].bass;
+      const bo=ac.createOscillator(),bg=ac.createGain(),bf=lpf(200);
+      bo.type='sine'; bo.frequency.value=bassHz;
+      bg.gain.setValueAtTime(0,t); bg.gain.linearRampToValueAtTime(0.26,t+0.06);
+      bg.gain.exponentialRampToValueAtTime(0.001,t+LB*4-0.1);
+      bo.connect(bf); bf.connect(bg); bg.connect(master); bo.start(t); bo.stop(t+LB*4);
+      lofiCI=(lofiCI+1)%LCH.length;
+    }
+    if (b%16===8) {
+      const ci=(lofiCI-1+LCH.length)%LCH.length;
+      const bo=ac.createOscillator(),bg=ac.createGain(),bf=lpf(200);
+      bo.type='sine'; bo.frequency.value=LCH[ci].bass;
+      bg.gain.setValueAtTime(0,t); bg.gain.linearRampToValueAtTime(0.26,t+0.06);
+      bg.gain.exponentialRampToValueAtTime(0.001,t+LB*4-0.1);
+      bo.connect(bf); bf.connect(bg); bg.connect(master); bo.start(t); bo.stop(t+LB*4);
+    }
+    const ht=t+sw,hl=Math.ceil(ac.sampleRate*0.06),hb=ac.createBuffer(1,hl,ac.sampleRate);
+    const hd=hb.getChannelData(0); for(let i=0;i<hl;i++) hd[i]=Math.random()*2-1;
+    const hs=ac.createBufferSource(); hs.buffer=hb;
+    const hf=hpf(7000),hg=ac.createGain();
+    const acc=e8===0||e8===4;
+    hg.gain.setValueAtTime(acc?0.07:0.032,ht); hg.gain.exponentialRampToValueAtTime(0.001,ht+0.05);
+    hs.connect(hf); hf.connect(hg); hg.connect(master); hs.start(ht); hs.stop(ht+0.06);
   }
 
-  function mkLpf(freq, q) {
-    const f = ac.createBiquadFilter();
-    f.type = 'lowpass'; f.frequency.value = freq;
-    if (q !== undefined) f.Q.value = q;
-    return f;
-  }
-
-  function schedChord(chord, t) {
-    chord.notes.forEach(freq => {
-      [-4, 4].forEach(detune => {
-        const o = ac.createOscillator(), g = ac.createGain(), f = mkLpf(680, 0.7);
-        o.type = 'triangle'; o.frequency.value = freq; o.detune.value = detune;
-        g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.052, t + 1.0);
-        g.gain.setValueAtTime(0.052, t + CHORD_LEN - 0.6);
-        g.gain.linearRampToValueAtTime(0, t + CHORD_LEN);
-        o.connect(f); f.connect(g); g.connect(master);
-        o.start(t); o.stop(t + CHORD_LEN + 0.1);
-      });
-    });
-  }
-
-  function schedBass(freq, t) {
-    const o = ac.createOscillator(), g = ac.createGain(), f = mkLpf(200);
-    o.type = 'sine'; o.frequency.value = freq;
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.26, t + 0.06);
-    g.gain.exponentialRampToValueAtTime(0.001, t + BAR - 0.1);
-    o.connect(f); f.connect(g); g.connect(master);
-    o.start(t); o.stop(t + BAR);
-  }
-
-  function schedHat(t, accent) {
-    const len = Math.ceil(ac.sampleRate * 0.06);
-    const buf = ac.createBuffer(1, len, ac.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random()*2-1;
-    const src = ac.createBufferSource(); src.buffer = buf;
-    const hpf = ac.createBiquadFilter();
-    hpf.type = 'highpass'; hpf.frequency.value = 7000;
-    const g = ac.createGain();
-    g.gain.setValueAtTime(accent ? 0.07 : 0.032, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-    src.connect(hpf); hpf.connect(g); g.connect(master);
-    src.start(t); src.stop(t + 0.06);
-  }
-
-  function schedule() {
-    const now = ac.currentTime;
-    while (nextTime < now + 0.1) {
-      const t = nextTime;
-      const eighth = beat % 8;
-      const swing = (beat % 2 === 1) ? BEAT * 0.035 : 0;
-
-      if (beat % 16 === 0) {
-        schedChord(CHORDS[chordIdx], t);
-        schedBass(CHORDS[chordIdx].bass, t);
-        chordIdx = (chordIdx + 1) % CHORDS.length;
-      }
-      if (beat % 16 === 8) {
-        const ci = (chordIdx - 1 + CHORDS.length) % CHORDS.length;
-        schedBass(CHORDS[ci].bass, t);
-      }
-
-      schedHat(t + swing, eighth === 0 || eighth === 4);
-      nextTime += BEAT / 2;
-      beat++;
+  // ── HARD ROCK ─────────────────────────────────────────────────────────────
+  const RB=60/140, RBAR=RB*4;
+  const RCH=[{root:82.41,fifth:123.47,bass:41.2},{root:110,fifth:164.81,bass:55},
+             {root:98,fifth:146.83,bass:49},{root:110,fifth:164.81,bass:55}];
+  function rockTick(t,b) {
+    const e8=b%8;
+    if (b%16===0) {
+      [RCH[rockCI].root,RCH[rockCI].fifth].forEach(hz=>[-8,0,8].forEach(det=>{
+        const o=ac.createOscillator(),g=ac.createGain(),ds=disto(280),f=lpf(1400,0.5);
+        o.type='sawtooth'; o.frequency.value=hz; o.detune.value=det;
+        g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.04,t+0.02);
+        g.gain.setValueAtTime(0.04,t+RBAR*2-0.1); g.gain.linearRampToValueAtTime(0,t+RBAR*2);
+        o.connect(ds); ds.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t+RBAR*2+0.1);}));
+      rockCI=(rockCI+1)%RCH.length;
+    }
+    if (e8===0||e8===4||b%16===6) { // kick
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='sine'; o.frequency.setValueAtTime(120,t); o.frequency.exponentialRampToValueAtTime(40,t+0.08);
+      g.gain.setValueAtTime(0.7,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.12);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t+0.13); nb(0.015,0.3,'highpass',3000,t);
+    }
+    if (e8===2||e8===6) { // snare
+      nb(0.12,0.45,'bandpass',1200,t);
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='triangle'; o.frequency.value=200;
+      g.gain.setValueAtTime(0.15,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.1);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t+0.11);
+    }
+    hat(t,e8===7,e8===7?0.05:0.04);
+    if (e8===0||e8===4) { // bass
+      const ci=(rockCI-1+RCH.length)%RCH.length;
+      const o=ac.createOscillator(),g=ac.createGain(),f=lpf(300);
+      o.type='sawtooth'; o.frequency.value=RCH[ci].bass;
+      g.gain.setValueAtTime(0.3,t); g.gain.exponentialRampToValueAtTime(0.001,t+RB*2-0.05);
+      o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t+RB*2);
     }
   }
 
-  function start() {
-    if (running) return;
-    if (!ac) setup();
-    if (ac.state === 'suspended') ac.resume();
-    nextTime = ac.currentTime + 0.1;
-    beat = 0; chordIdx = 0;
-    schedule();
-    schedTimer = setInterval(schedule, 25);
-    running = true;
+  // ── KPOP ──────────────────────────────────────────────────────────────────
+  const KB=60/128, KBAR=KB*4;
+  const KCH=[{notes:[261.63,329.63,392,523.25],bass:130.81},{notes:[196,246.94,293.66,392],bass:98},
+             {notes:[220,261.63,329.63,440],bass:110},{notes:[174.61,220,261.63,349.23],bass:87.31}];
+  const KARP=[0,2,1,3,0,2,3,1];
+  function kpopTick(t,b) {
+    const e8=b%8;
+    if (b%8===0) {
+      KCH[kpopCI].notes.forEach(hz=>{
+        const o=ac.createOscillator(),g=ac.createGain(),f=lpf(2200,0.5);
+        o.type='square'; o.frequency.value=hz; o.detune.value=2;
+        g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.038,t+0.01);
+        g.gain.setValueAtTime(0.038,t+KBAR-0.08); g.gain.linearRampToValueAtTime(0,t+KBAR);
+        o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t+KBAR+0.05);});
+      const bo=ac.createOscillator(),bg=ac.createGain(),bf=lpf(400);
+      bo.type='sine'; bo.frequency.value=KCH[kpopCI].bass;
+      bg.gain.setValueAtTime(0,t); bg.gain.linearRampToValueAtTime(0.3,t+0.03);
+      bg.gain.exponentialRampToValueAtTime(0.001,t+KBAR-0.05);
+      bo.connect(bf); bf.connect(bg); bg.connect(master); bo.start(t); bo.stop(t+KBAR);
+      kpopCI=(kpopCI+1)%KCH.length;
+    }
+    if (e8%2===0) { // four-on-floor kick
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='sine'; o.frequency.setValueAtTime(160,t); o.frequency.exponentialRampToValueAtTime(45,t+0.07);
+      g.gain.setValueAtTime(0.75,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.1);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t+0.11);
+    }
+    if (e8===2||e8===6) { nb(0.08,0.35,'bandpass',2000,t); nb(0.04,0.15,'highpass',6000,t); } // clap
+    const ci=(kpopCI-1+KCH.length)%KCH.length;
+    const arpHz=KCH[ci].notes[KARP[b%8]]*2;
+    const ao=ac.createOscillator(),ag=ac.createGain();
+    ao.type='triangle'; ao.frequency.value=arpHz;
+    ag.gain.setValueAtTime(0.08,t); ag.gain.exponentialRampToValueAtTime(0.001,t+KB*0.45);
+    ao.connect(ag); ag.connect(master); ao.start(t); ao.stop(t+KB*0.5);
+    nb(0.03,0.04,'highpass',9000,t); // 16th hats
   }
 
-  function toggle() {
-    if (!ac) { setup(); }
-    muted = !muted;
-    master.gain.setTargetAtTime(muted ? 0 : 0.32, ac.currentTime, 0.3);
-    return muted;
+  // ── SCHEDULER ─────────────────────────────────────────────────────────────
+  function beatDur() { return (mode==='lofi'?LB : mode==='rock'?RB : KB)/2; }
+  function runSched() {
+    if (!ac||mode==='off') return;
+    const now=ac.currentTime;
+    while (nextTime<now+0.1) {
+      if (mode==='lofi') lofiTick(nextTime,beat);
+      else if (mode==='rock') rockTick(nextTime,beat);
+      else if (mode==='kpop') kpopTick(nextTime,beat);
+      nextTime+=beatDur(); beat++;
+    }
   }
 
-  return { start, toggle, isMuted: () => muted };
+  function setMode(m) {
+    ensure(); mode=m; clearInterval(timer); timer=null; beat=0; lofiCI=0; rockCI=0; kpopCI=0;
+    if (m!=='off') {
+      master.gain.setTargetAtTime(0.32,ac.currentTime,0.1);
+      vinylGain.gain.setTargetAtTime(m==='lofi'?0.2:0,ac.currentTime,0.5);
+      nextTime=ac.currentTime+0.1; runSched(); timer=setInterval(runSched,25);
+    } else {
+      master.gain.setTargetAtTime(0,ac.currentTime,0.3);
+      vinylGain.gain.setTargetAtTime(0,ac.currentTime,0.5);
+    }
+  }
+
+  function cycle() { ensure(); setMode(MODES[(MODES.indexOf(mode)+1)%MODES.length]); }
+  function start() { ensure(); }
+  return { start, cycle, getMode:()=>mode };
 })();
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
@@ -520,20 +644,23 @@ class Player {
     ctx.beginPath(); ctx.ellipse(2,3,13,8,0,0,Math.PI*2); ctx.fill();
     ctx.restore();
 
-    // Legs
+    // Legs (P2 = teal/orange palette)
     const leg = Math.sin(this.walkCycle)*5;
-    ctx.fillStyle = flash ? '#fff' : '#1a3a15';
+    const legCol  = this.isP2 ? '#3a2a00' : '#1a3a15';
+    const bodyCol = this.isP2 ? '#c07000' : '#2d6a23';
+    const bodyCol2= this.isP2 ? '#8a5000' : '#245218';
+    ctx.fillStyle = flash ? '#fff' : legCol;
     ctx.fillRect(-9, -9+leg, 8, 5);
     ctx.fillRect(-9,  4-leg, 8, 5);
 
     // Body
-    ctx.fillStyle = flash ? '#fff' : '#2d6a23';
+    ctx.fillStyle = flash ? '#fff' : bodyCol;
     ctx.fillRect(-10,-10,20,20);
     // Chest detail
     if (!flash) {
-      ctx.fillStyle='#245218';
+      ctx.fillStyle=bodyCol2;
       ctx.fillRect(-7,-7,14,14);
-      ctx.fillStyle='#2d6a23';
+      ctx.fillStyle=bodyCol;
       ctx.fillRect(-5,-5,10,10);
     }
 
@@ -744,7 +871,7 @@ class Enemy {
 }
 
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
-let player, enemies, bullets, particles, scorePopups;
+let player, player2, enemies, bullets, particles, scorePopups;
 const gameState = {
   current: 'start',
   level: 1,
@@ -775,6 +902,8 @@ function buildSpawnQueue(config) {
 
 function startGame() {
   player = new Player();
+  player2 = (mpMode !== 'solo') ? new Player() : null;
+  if (player2) { player2.x = W/2 + 40; player2.y = H/2 + 40; player2.isP2 = true; }
   enemies = []; bullets = []; particles = []; scorePopups = [];
   gameState.score = 0;
   gameState.level = 1;
@@ -818,19 +947,18 @@ function handleCollisions() {
       }
     } else {
       if (player.alive && circleHit(b,player)) {
-        b.alive=false;
-        player.takeDamage(10);
-        spawnHitParticles(b.x,b.y);
+        b.alive=false; player.takeDamage(10); spawnHitParticles(b.x,b.y);
+      } else if (player2 && player2.alive && circleHit(b,player2)) {
+        b.alive=false; player2.takeDamage(10); spawnHitParticles(b.x,b.y);
       }
     }
   }
 
   // Enemies vs player (melee)
   for (const e of enemies) {
-    if (!e.alive||!player.alive) continue;
-    if (circleHit(e,player)) {
-      player.takeDamage(12);
-    }
+    if (!e.alive) continue;
+    if (player.alive && circleHit(e,player)) player.takeDamage(12);
+    if (player2 && player2.alive && circleHit(e,player2)) player2.takeDamage(12);
   }
 
   // Enemy separation
@@ -853,10 +981,15 @@ function handleCollisions() {
 
 // ─── UPDATE ──────────────────────────────────────────────────────────────────
 function update(dt) {
+  // Guest: don't simulate — just render received state; send input to host
+  if (mpMode === 'guest') {
+    if (mpConn) mpConn.send({type:'input', keys:{...input.keys}, mx:input.mx, my:input.my, down:input.down});
+    input.clicked = false;
+    return;
+  }
   gameState.titleTime+=dt;
 
   if (gameState.current==='start') {
-    // animate some ambient particles on start screen
     if (Math.random()<0.15) {
       particles.push(new Particle(rand(0,W),H+10, rand(-20,20),rand(-60,-20),'spark',rand(1.5,3.0),rand(1,3),'#00e5ff'));
     }
@@ -897,7 +1030,22 @@ function update(dt) {
 
   player.update(dt);
 
-  for (const e of enemies) e.update(dt,player);
+  // Player2 update (host applies received guest input)
+  if (player2) {
+    const gi = guestInput;
+    const savedInput = {...input};
+    input.keys = gi.keys || {}; input.mx = gi.mx ?? W/2; input.my = gi.my ?? H/2; input.down = gi.down ?? false;
+    player2.update(dt);
+    Object.assign(input, savedInput);
+  }
+
+  // Broadcast state to guest every 3 ticks (~20fps)
+  if (mpMode === 'host' && mpConn) {
+    syncTick++;
+    if (syncTick % 3 === 0) mpConn.send(serializeState());
+  }
+
+  for (const e of enemies) e.update(dt, player);
   for (const b of bullets) b.update(dt);
   particles.forEach(p=>p.update(dt));
   scorePopups.forEach(s=>s.update(dt));
@@ -974,7 +1122,16 @@ function drawHUD() {
   }
   ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(10,12,160,18);
   ctx.fillStyle='#fff'; ctx.font='bold 11px monospace'; ctx.textAlign='left';
-  ctx.fillText(`HP  ${player.health} / ${player.maxHealth}`, 16, 25);
+  ctx.fillText(mpMode!=='solo'?`P1  ${player.health}`:`HP  ${player.health} / ${player.maxHealth}`, 16, 25);
+  // P2 health bar in multiplayer
+  if(mpMode!=='solo' && player2) {
+    const hp2=player2.health/player2.maxHealth;
+    ctx.fillStyle='#1a1a1a'; ctx.fillRect(180,12,130,18);
+    ctx.fillStyle=hp2>0.6?'#f39c12':hp2>0.3?'#e67e22':'#e74c3c';
+    ctx.fillRect(180,12,130*hp2,18);
+    ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(180,12,130,18);
+    ctx.fillStyle='#fff'; ctx.fillText(`P2  ${player2.health}`,186,25);
+  }
 
   // Level
   ctx.fillStyle='#00e5ff'; ctx.font='bold 17px monospace'; ctx.textAlign='center';
@@ -991,9 +1148,10 @@ function drawHUD() {
   ctx.fillText(`ENEMIES: ${remaining}`, 12, H-10);
 
   ctx.fillStyle='#555'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('ARROWS/WASD · MOUSE AIM · CLICK SHOOT · M MUTE', W-10, H-10);
-  ctx.fillStyle = lofi.isMuted() ? '#555' : '#4caf50';
-  ctx.fillText(lofi.isMuted() ? '♪ OFF' : '♪ ON', W-10, H-22);
+  ctx.fillText('ARROWS/WASD · MOUSE AIM · CLICK SHOOT · M: MUSIC', W-10, H-10);
+  const mLabel = {'off':'♪ OFF','lofi':'♪ LOFI','rock':'♪ ROCK','kpop':'♪ KPOP'}[music.getMode()];
+  ctx.fillStyle = music.getMode()==='off' ? '#555' : '#4caf50';
+  ctx.fillText(mLabel, W-10, H-22);
 
   ctx.textAlign='left';
 }
@@ -1126,8 +1284,17 @@ function draw() {
   for(const e of enemies) if(e.alive) e.draw(ctx);
   for(const e of enemies) if(!e.alive) e.draw(ctx);
 
-  // Player
+  // Players
   if(player) player.draw(ctx);
+  if(player2) player2.draw(ctx);
+  // P1/P2 labels in multiplayer
+  if(mpMode!=='solo' && player && player2) {
+    [[player,'P1','#2ecc71'],[player2,'P2','#f39c12']].forEach(([p,lbl,col])=>{
+      if(!p.alive) return;
+      ctx.save(); ctx.fillStyle=col; ctx.font='bold 10px monospace'; ctx.textAlign='center';
+      ctx.fillText(lbl,p.x,p.y-p.radius-6); ctx.restore();
+    });
+  }
 
   // Front particles
   particles.filter(p=>p.type!=='smoke'&&p.type!=='blood').forEach(p=>p.draw(ctx));
@@ -1158,7 +1325,55 @@ function loop(ts) {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 particles=[]; scorePopups=[]; bullets=[]; enemies=[];
-player=null;
+player=null; player2=null;
+
+document.getElementById('mp-solo').addEventListener('click', () => {
+  mpMode='solo'; document.getElementById('mp-overlay').style.display='none';
+});
+
+if (joinId) {
+  // GUEST: show overlay and connect
+  mpMode='guest';
+  document.getElementById('mp-overlay').style.display='flex';
+  mpSetStatus('Joining game...');
+  mpPeer = new Peer();
+  mpPeer.on('open', () => {
+    const conn = mpPeer.connect(joinId, {reliable:true});
+    mpSetupConn(conn);
+    conn.on('open', () => {
+      document.getElementById('mp-overlay').style.display='none';
+      startGame();
+    });
+  });
+  mpPeer.on('error', e => mpSetStatus('Connection error: '+e.type));
+} else if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+  // HOST: only show multiplayer lobby on hosted URLs (GitHub Pages), not local
+  mpMode='host';
+  document.getElementById('mp-overlay').style.display='flex';
+  mpPeer = new Peer();
+  mpPeer.on('open', id => {
+    const url = location.origin + location.pathname + '?join=' + id;
+    mpSetStatus('Share this link with a friend:');
+    const row = document.getElementById('mp-link-row');
+    const inp = document.getElementById('mp-link');
+    inp.value = url; row.style.display='flex';
+    document.getElementById('mp-copy').addEventListener('click', () => {
+      navigator.clipboard.writeText(url).then(() => {
+        document.getElementById('mp-copy').textContent='Copied!';
+        setTimeout(()=>document.getElementById('mp-copy').textContent='Copy',2000);
+      });
+    });
+  });
+  mpPeer.on('connection', conn => {
+    mpSetupConn(conn);
+    conn.on('open', () => {
+      document.getElementById('mp-overlay').style.display='none';
+      startGame();
+    });
+  });
+  mpPeer.on('error', e => mpSetStatus('Error: '+e.type));
+}
+// Local: just play solo, no overlay
 requestAnimationFrame(ts=>{ lastT=ts; requestAnimationFrame(loop); });
 </script>
 </body>
