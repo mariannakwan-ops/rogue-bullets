@@ -11,7 +11,7 @@ canvas { cursor: none; display: block; }
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="mp-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#eee;font-family:monospace">
+<div id="mp-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#eee;font-family:monospace">
   <div style="font-size:2rem;color:#e94560;letter-spacing:2px">MULTIPLAYER</div>
   <div id="mp-status" style="color:#a8dadc;font-size:1rem">Connecting...</div>
   <div id="mp-link-row" style="display:none;gap:8px;align-items:center">
@@ -369,40 +369,59 @@ const music = (() => {
   }
 
   // ── KPOP ──────────────────────────────────────────────────────────────────
+  // Classic KPop: I–V–vi–IV (C–G–Am–F), 128 BPM, bright pads + punchy drums + catchy hook melody
   const KB=60/128, KBAR=KB*4;
-  const KCH=[{notes:[261.63,329.63,392,523.25],bass:130.81},{notes:[196,246.94,293.66,392],bass:98},
-             {notes:[220,261.63,329.63,440],bass:110},{notes:[174.61,220,261.63,349.23],bass:87.31}];
-  const KARP=[0,2,1,3,0,2,3,1];
+  // Pad chords (C G Am F) — stacked sine for warmth
+  const KCH=[{notes:[523.25,659.25,783.99],bass:130.81},  // C maj
+             {notes:[392.00,493.88,587.33],bass:98.00},   // G maj
+             {notes:[440.00,523.25,659.25],bass:110.00},  // A min
+             {notes:[349.23,440.00,523.25],bass:87.31}];  // F maj
+  // Hook melody (C major scale notes, 8-bar phrase cycling)
+  const KMELODY=[523.25,587.33,659.25,698.46,783.99,659.25,587.33,523.25,
+                 493.88,523.25,587.33,659.25,587.33,523.25,493.88,440.00];
   function kpopTick(t,b) {
     const e8=b%8;
+    // Bright pad chord every bar
     if (b%8===0) {
       KCH[kpopCI].notes.forEach(hz=>{
-        const o=ac.createOscillator(),g=ac.createGain(),f=lpf(2200,0.5);
-        o.type='square'; o.frequency.value=hz; o.detune.value=2;
-        g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.038,t+0.01);
-        g.gain.setValueAtTime(0.038,t+KBAR-0.08); g.gain.linearRampToValueAtTime(0,t+KBAR);
-        o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t+KBAR+0.05);});
-      const bo=ac.createOscillator(),bg=ac.createGain(),bf=lpf(400);
+        // Two sine oscs slightly detuned = warm KPop pad
+        [-5,5].forEach(det=>{
+          const o=ac.createOscillator(),g=ac.createGain(),f=lpf(3000,0.3);
+          o.type='sine'; o.frequency.value=hz; o.detune.value=det;
+          g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.055,t+0.03);
+          g.gain.setValueAtTime(0.055,t+KBAR-0.12); g.gain.linearRampToValueAtTime(0,t+KBAR);
+          o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t+KBAR+0.05);});
+      });
+      // Punchy synth bass (sine + slight sawtooth layer)
+      const bo=ac.createOscillator(),bg=ac.createGain(),bf=lpf(500);
       bo.type='sine'; bo.frequency.value=KCH[kpopCI].bass;
-      bg.gain.setValueAtTime(0,t); bg.gain.linearRampToValueAtTime(0.3,t+0.03);
-      bg.gain.exponentialRampToValueAtTime(0.001,t+KBAR-0.05);
+      bg.gain.setValueAtTime(0.5,t); bg.gain.exponentialRampToValueAtTime(0.08,t+0.15);
+      bg.gain.exponentialRampToValueAtTime(0.001,t+KBAR*0.6);
       bo.connect(bf); bf.connect(bg); bg.connect(master); bo.start(t); bo.stop(t+KBAR);
       kpopCI=(kpopCI+1)%KCH.length;
     }
-    if (e8%2===0) { // four-on-floor kick
+    // Hook melody — bright triangle lead, one note per eighth note
+    const melHz=KMELODY[b%16];
+    const mo=ac.createOscillator(),mg=ac.createGain(),mf=lpf(4000);
+    mo.type='triangle'; mo.frequency.value=melHz;
+    mg.gain.setValueAtTime(0,t); mg.gain.linearRampToValueAtTime(0.13,t+0.01);
+    mg.gain.setValueAtTime(0.13,t+KB*0.38); mg.gain.linearRampToValueAtTime(0,t+KB*0.48);
+    mo.connect(mf); mf.connect(mg); mg.connect(master); mo.start(t); mo.stop(t+KB*0.5);
+    // Four-on-floor kick
+    if (e8%2===0) {
       const o=ac.createOscillator(),g=ac.createGain();
-      o.type='sine'; o.frequency.setValueAtTime(160,t); o.frequency.exponentialRampToValueAtTime(45,t+0.07);
-      g.gain.setValueAtTime(0.75,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.1);
+      o.type='sine'; o.frequency.setValueAtTime(180,t); o.frequency.exponentialRampToValueAtTime(45,t+0.06);
+      g.gain.setValueAtTime(0.8,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.1);
       o.connect(g); g.connect(master); o.start(t); o.stop(t+0.11);
     }
-    if (e8===2||e8===6) { nb(0.08,0.35,'bandpass',2000,t); nb(0.04,0.15,'highpass',6000,t); } // clap
-    const ci=(kpopCI-1+KCH.length)%KCH.length;
-    const arpHz=KCH[ci].notes[KARP[b%8]]*2;
-    const ao=ac.createOscillator(),ag=ac.createGain();
-    ao.type='triangle'; ao.frequency.value=arpHz;
-    ag.gain.setValueAtTime(0.08,t); ag.gain.exponentialRampToValueAtTime(0.001,t+KB*0.45);
-    ao.connect(ag); ag.connect(master); ao.start(t); ao.stop(t+KB*0.5);
-    nb(0.03,0.04,'highpass',9000,t); // 16th hats
+    // Snappy clap on 2 & 4
+    if (e8===2||e8===6) {
+      nb(0.06,0.4,'bandpass',2200,t); nb(0.04,0.2,'highpass',5000,t);
+      // Extra brightness layer
+      nb(0.03,0.15,'highpass',8000,t+0.008);
+    }
+    // Open hi-hat every 8th, closed 16th feel on offbeats
+    nb(e8%2===1?0.05:0.025, e8%2===1?0.05:0.03,'highpass',10000,t);
   }
 
   // ── SCHEDULER ─────────────────────────────────────────────────────────────
