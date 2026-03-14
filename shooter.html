@@ -51,7 +51,12 @@ const input = { keys: {}, mx: W/2, my: H/2, down: false, clicked: false };
 window.addEventListener('keydown', e => {
   input.keys[e.code] = true;
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  if (e.code === 'KeyM') lofi.toggle();
 });
+// Start lofi music on first user interaction
+['click','keydown'].forEach(ev =>
+  window.addEventListener(ev, () => lofi.start(), { once: true })
+);
 window.addEventListener('keyup',   e => { input.keys[e.code] = false; });
 canvas.addEventListener('mousemove', e => {
   const r = canvas.getBoundingClientRect();
@@ -158,6 +163,136 @@ const sfx = (() => {
       osc('sine', 80, 200, 0.15, 0.07);
     },
   };
+})();
+
+// ─── LOFI MUSIC ──────────────────────────────────────────────────────────────
+const lofi = (() => {
+  let ac = null, master = null, running = false, muted = false;
+  let schedTimer = null, nextTime = 0, beat = 0, chordIdx = 0;
+
+  const BPM = 78;
+  const BEAT = 60 / BPM;       // ~0.769 s per beat
+  const BAR  = BEAT * 4;       // ~3.077 s per bar
+  const CHORD_LEN = BAR * 2;   // each chord lasts 2 bars
+
+  // Cmaj7 → Am7 → Fmaj7 → G7
+  const CHORDS = [
+    { notes: [130.81, 164.81, 196.00, 246.94], bass: 65.41 },
+    { notes: [110.00, 130.81, 164.81, 196.00], bass: 55.00 },
+    { notes: [ 87.31, 110.00, 130.81, 164.81], bass: 43.65 },
+    { notes: [ 98.00, 123.47, 146.83, 174.61], bass: 49.00 },
+  ];
+
+  function setup() {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain();
+    master.gain.value = 0.32;
+    master.connect(ac.destination);
+
+    // Vinyl crackle — looping noise with rare pops
+    const len = Math.ceil(ac.sampleRate * 3);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++)
+      d[i] = Math.random() < 0.004
+        ? (Math.random()*2-1) * 0.22
+        : (Math.random()*2-1) * 0.004;
+    const vinyl = ac.createBufferSource();
+    vinyl.buffer = buf; vinyl.loop = true;
+    const vg = ac.createGain(); vg.gain.value = 0.2;
+    vinyl.connect(vg); vg.connect(master);
+    vinyl.start();
+  }
+
+  function mkLpf(freq, q) {
+    const f = ac.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = freq;
+    if (q !== undefined) f.Q.value = q;
+    return f;
+  }
+
+  function schedChord(chord, t) {
+    chord.notes.forEach(freq => {
+      [-4, 4].forEach(detune => {
+        const o = ac.createOscillator(), g = ac.createGain(), f = mkLpf(680, 0.7);
+        o.type = 'triangle'; o.frequency.value = freq; o.detune.value = detune;
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(0.052, t + 1.0);
+        g.gain.setValueAtTime(0.052, t + CHORD_LEN - 0.6);
+        g.gain.linearRampToValueAtTime(0, t + CHORD_LEN);
+        o.connect(f); f.connect(g); g.connect(master);
+        o.start(t); o.stop(t + CHORD_LEN + 0.1);
+      });
+    });
+  }
+
+  function schedBass(freq, t) {
+    const o = ac.createOscillator(), g = ac.createGain(), f = mkLpf(200);
+    o.type = 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.26, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.001, t + BAR - 0.1);
+    o.connect(f); f.connect(g); g.connect(master);
+    o.start(t); o.stop(t + BAR);
+  }
+
+  function schedHat(t, accent) {
+    const len = Math.ceil(ac.sampleRate * 0.06);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random()*2-1;
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const hpf = ac.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 7000;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(accent ? 0.07 : 0.032, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    src.connect(hpf); hpf.connect(g); g.connect(master);
+    src.start(t); src.stop(t + 0.06);
+  }
+
+  function schedule() {
+    const now = ac.currentTime;
+    while (nextTime < now + 0.1) {
+      const t = nextTime;
+      const eighth = beat % 8;
+      const swing = (beat % 2 === 1) ? BEAT * 0.035 : 0;
+
+      if (beat % 16 === 0) {
+        schedChord(CHORDS[chordIdx], t);
+        schedBass(CHORDS[chordIdx].bass, t);
+        chordIdx = (chordIdx + 1) % CHORDS.length;
+      }
+      if (beat % 16 === 8) {
+        const ci = (chordIdx - 1 + CHORDS.length) % CHORDS.length;
+        schedBass(CHORDS[ci].bass, t);
+      }
+
+      schedHat(t + swing, eighth === 0 || eighth === 4);
+      nextTime += BEAT / 2;
+      beat++;
+    }
+  }
+
+  function start() {
+    if (running) return;
+    if (!ac) setup();
+    if (ac.state === 'suspended') ac.resume();
+    nextTime = ac.currentTime + 0.1;
+    beat = 0; chordIdx = 0;
+    schedule();
+    schedTimer = setInterval(schedule, 25);
+    running = true;
+  }
+
+  function toggle() {
+    if (!ac) { setup(); }
+    muted = !muted;
+    master.gain.setTargetAtTime(muted ? 0 : 0.32, ac.currentTime, 0.3);
+    return muted;
+  }
+
+  return { start, toggle, isMuted: () => muted };
 })();
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
@@ -856,7 +991,9 @@ function drawHUD() {
   ctx.fillText(`ENEMIES: ${remaining}`, 12, H-10);
 
   ctx.fillStyle='#555'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('ARROWS/WASD · MOUSE AIM · CLICK SHOOT', W-10, H-10);
+  ctx.fillText('ARROWS/WASD · MOUSE AIM · CLICK SHOOT · M MUTE', W-10, H-10);
+  ctx.fillStyle = lofi.isMuted() ? '#555' : '#4caf50';
+  ctx.fillText(lofi.isMuted() ? '♪ OFF' : '♪ ON', W-10, H-22);
 
   ctx.textAlign='left';
 }
