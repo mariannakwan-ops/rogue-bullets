@@ -77,6 +77,11 @@ canvas.addEventListener('mousedown', e => {
   const r = canvas.getBoundingClientRect();
   const cx = (e.clientX - r.left) * (W / r.width);
   const cy = (e.clientY - r.top)  * (H / r.height);
+  // Invite button
+  const ib = gameState._inviteBtn;
+  if (ib && cx>=ib.x && cx<=ib.x+ib.w && cy>=ib.y && cy<=ib.y+ib.h) {
+    showInviteOverlay(); return;
+  }
   // Check music button clicks
   const btns = gameState._musicBtns;
   if (btns) {
@@ -909,6 +914,7 @@ class Enemy {
 let player, player2, enemies, bullets, particles, scorePopups;
 const gameState = {
   _musicBtns: {},
+  _inviteBtn: null,
   current: 'start',
   level: 1,
   score: 0,
@@ -1258,6 +1264,18 @@ function drawStartScreen() {
     ctx.fillStyle='#f1c40f'; ctx.font='bold 15px monospace';
     ctx.fillText(`HIGH SCORE: ${gameState.highScore}`, W/2, H/2+90);
   }
+
+  // Invite friend button (host on GitHub Pages)
+  if (mpMode==='host' && mpInviteUrl) {
+    const lbl='♥ INVITE A FRIEND';
+    ctx.font='bold 13px monospace';
+    const bw=ctx.measureText(lbl).width+24, bh=28;
+    const bx=W/2-bw/2, by=H/2+118;
+    ctx.fillStyle='#16213e'; ctx.strokeStyle='#e94560'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,6); ctx.fill(); ctx.stroke();
+    ctx.fillStyle='#e94560'; ctx.fillText(lbl,W/2,by+19);
+    gameState._inviteBtn={x:bx,y:by,w:bw,h:bh};
+  }
   ctx.textAlign='left';
 }
 
@@ -1382,12 +1400,25 @@ function loop(ts) {
 particles=[]; scorePopups=[]; bullets=[]; enemies=[];
 player=null; player2=null;
 
+let mpInviteUrl = null; // set once PeerJS is ready on host
+
 document.getElementById('mp-solo').addEventListener('click', () => {
-  mpMode='solo'; document.getElementById('mp-overlay').style.display='none';
+  mpMode='solo';
+  document.getElementById('mp-overlay').style.display='none';
+  if (gameState.current !== 'playing') startGame();
 });
 
+function showInviteOverlay() {
+  if (!mpInviteUrl) return;
+  document.getElementById('mp-overlay').style.display='flex';
+  mpSetStatus('Share this link with a friend:');
+  const row = document.getElementById('mp-link-row');
+  const inp = document.getElementById('mp-link');
+  inp.value = mpInviteUrl; row.style.display='flex';
+}
+
 if (joinId) {
-  // GUEST: show overlay and connect
+  // GUEST: joining via invite link
   mpMode='guest';
   document.getElementById('mp-overlay').style.display='flex';
   mpSetStatus('Joining game...');
@@ -1400,20 +1431,21 @@ if (joinId) {
       startGame();
     });
   });
-  mpPeer.on('error', e => mpSetStatus('Connection error: '+e.type));
+  mpPeer.on('error', e => {
+    if (e.type === 'peer-unavailable') {
+      mpSetStatus("That invite link has expired — ask your friend for a new one.");
+    } else {
+      mpSetStatus('Connection error: ' + e.type);
+    }
+  });
 } else if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-  // HOST: only show multiplayer lobby on hosted URLs (GitHub Pages), not local
+  // HOST on GitHub Pages: prepare PeerJS silently, show invite button on start screen
   mpMode='host';
-  document.getElementById('mp-overlay').style.display='flex';
   mpPeer = new Peer();
   mpPeer.on('open', id => {
-    const url = location.origin + location.pathname + '?join=' + id;
-    mpSetStatus('Share this link with a friend:');
-    const row = document.getElementById('mp-link-row');
-    const inp = document.getElementById('mp-link');
-    inp.value = url; row.style.display='flex';
+    mpInviteUrl = location.origin + location.pathname + '?join=' + id;
     document.getElementById('mp-copy').addEventListener('click', () => {
-      navigator.clipboard.writeText(url).then(() => {
+      navigator.clipboard.writeText(mpInviteUrl).then(() => {
         document.getElementById('mp-copy').textContent='Copied!';
         setTimeout(()=>document.getElementById('mp-copy').textContent='Copy',2000);
       });
@@ -1426,9 +1458,9 @@ if (joinId) {
       startGame();
     });
   });
-  mpPeer.on('error', e => mpSetStatus('Error: '+e.type));
+  mpPeer.on('error', e => console.warn('PeerJS:', e.type));
 }
-// Local: just play solo, no overlay
+
 requestAnimationFrame(ts=>{ lastT=ts; requestAnimationFrame(loop); });
 </script>
 </body>
