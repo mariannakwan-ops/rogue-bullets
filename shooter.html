@@ -72,7 +72,23 @@ canvas.addEventListener('mousemove', e => {
   input.mx = (e.clientX - r.left) * (W / r.width);
   input.my = (e.clientY - r.top)  * (H / r.height);
 });
-canvas.addEventListener('mousedown', e => { if (e.button===0){ input.down=true; input.clicked=true; } });
+canvas.addEventListener('mousedown', e => {
+  if (e.button!==0) return;
+  const r = canvas.getBoundingClientRect();
+  const cx = (e.clientX - r.left) * (W / r.width);
+  const cy = (e.clientY - r.top)  * (H / r.height);
+  // Check music button clicks
+  const btns = gameState._musicBtns;
+  if (btns) {
+    for (const [m, b] of Object.entries(btns)) {
+      if (cx>=b.x && cx<=b.x+b.w && cy>=b.y && cy<=b.y+b.h) {
+        music.setMode(m);
+        return;
+      }
+    }
+  }
+  input.down=true; input.clicked=true;
+});
 canvas.addEventListener('mouseup',   e => { if (e.button===0) input.down=false; });
 window.addEventListener('keypress',  e => { input.clicked = true; });
 
@@ -416,7 +432,7 @@ const music = (() => {
 
   function cycle() { ensure(); setMode(MODES[(MODES.indexOf(mode)+1)%MODES.length]); }
   function start() { ensure(); }
-  return { start, cycle, getMode:()=>mode };
+  return { start, cycle, setMode: m => { ensure(); setMode(m); }, getMode:()=>mode };
 })();
 
 // ─── UTILITIES ───────────────────────────────────────────────────────────────
@@ -873,6 +889,7 @@ class Enemy {
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
 let player, player2, enemies, bullets, particles, scorePopups;
 const gameState = {
+  _musicBtns: {},
   current: 'start',
   level: 1,
   score: 0,
@@ -1148,10 +1165,29 @@ function drawHUD() {
   ctx.fillText(`ENEMIES: ${remaining}`, 12, H-10);
 
   ctx.fillStyle='#555'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('ARROWS/WASD · MOUSE AIM · CLICK SHOOT · M: MUSIC', W-10, H-10);
-  const mLabel = {'off':'♪ OFF','lofi':'♪ LOFI','rock':'♪ ROCK','kpop':'♪ KPOP'}[music.getMode()];
-  ctx.fillStyle = music.getMode()==='off' ? '#555' : '#4caf50';
-  ctx.fillText(mLabel, W-10, H-22);
+  ctx.fillText('ARROWS/WASD · MOUSE AIM · CLICK SHOOT', W-10, H-10);
+
+  // Music buttons: [OFF] [LOFI] [ROCK] [KPOP]
+  const musicBtns = ['off','lofi','rock','kpop'];
+  const btnLabels = {'off':'OFF','lofi':'LOFI','rock':'ROCK','kpop':'KPOP'};
+  const btnColors = {'off':'#444','lofi':'#2980b9','rock':'#c0392b','kpop':'#8e44ad'};
+  let bx = 12;
+  const by = H - 28, bh = 18;
+  musicBtns.forEach(m => {
+    const lbl = '♪ '+btnLabels[m];
+    ctx.font = 'bold 11px monospace';
+    const bw = ctx.measureText(lbl).width + 14;
+    const active = music.getMode() === m;
+    ctx.fillStyle = active ? btnColors[m] : '#222';
+    ctx.strokeStyle = active ? btnColors[m] : '#444';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = active ? '#fff' : '#888';
+    ctx.textAlign = 'left';
+    ctx.fillText(lbl, bx + 7, by + 13);
+    gameState._musicBtns[m] = {x:bx, y:by, w:bw, h:bh};
+    bx += bw + 6;
+  });
 
   ctx.textAlign='left';
 }
