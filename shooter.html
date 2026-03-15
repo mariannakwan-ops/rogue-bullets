@@ -11,14 +11,15 @@ canvas { cursor: none; display: block; }
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="mp-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#eee;font-family:monospace">
+<div id="mp-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#eee;font-family:monospace;z-index:999">
   <div style="font-size:2rem;color:#e94560;letter-spacing:2px">MULTIPLAYER</div>
-  <div id="mp-status" style="color:#a8dadc;font-size:1rem">Connecting...</div>
-  <div id="mp-link-row" style="display:none;gap:8px;align-items:center">
-    <input id="mp-link" readonly style="background:#16213e;border:1px solid #0f3460;color:#eee;padding:6px 10px;border-radius:6px;font-size:0.85rem;width:340px">
-    <button id="mp-copy" style="padding:6px 14px;border:none;border-radius:6px;background:#0f3460;color:#eee;cursor:pointer">Copy</button>
+  <div id="mp-status" style="color:#a8dadc;font-size:1rem;text-align:center;max-width:480px">Connecting...</div>
+  <div id="mp-link-row" style="display:none;flex-direction:column;align-items:center;gap:8px">
+    <input id="mp-link" readonly onclick="this.select()" style="background:#16213e;border:1px solid #0f3460;color:#fff;padding:8px 12px;border-radius:6px;font-size:0.8rem;width:460px;cursor:text">
+    <button id="mp-copy" style="padding:8px 28px;border:none;border-radius:6px;background:#e94560;color:#fff;cursor:pointer;font-size:1rem;font-weight:bold">Copy Link</button>
+    <div style="color:#f39c12;font-size:0.75rem">⚠ This link expires if you refresh — send it now!</div>
   </div>
-  <button id="mp-solo" style="margin-top:8px;padding:8px 24px;border:none;border-radius:8px;background:#555;color:#eee;cursor:pointer;font-size:0.9rem">Play Solo Instead</button>
+  <button id="mp-solo" style="margin-top:4px;padding:8px 24px;border:none;border-radius:8px;background:#555;color:#eee;cursor:pointer;font-size:0.9rem">Play Solo Instead</button>
 </div>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
@@ -1414,7 +1415,7 @@ function showInviteOverlay() {
   mpSetStatus('Share this link with a friend:');
   const row = document.getElementById('mp-link-row');
   const inp = document.getElementById('mp-link');
-  inp.value = mpInviteUrl; row.style.display='flex';
+  inp.value = mpInviteUrl; row.style.display='flex'; row.style.flexDirection='column'; row.style.alignItems='center';
 }
 
 function onConnOpen() {
@@ -1454,9 +1455,16 @@ if (joinId) {
   mpPeer.on('open', id => {
     mpInviteUrl = location.origin + location.pathname + '?join=' + id;
     document.getElementById('mp-copy').addEventListener('click', () => {
-      navigator.clipboard.writeText(mpInviteUrl).then(() => {
-        document.getElementById('mp-copy').textContent='Copied!';
-        setTimeout(()=>document.getElementById('mp-copy').textContent='Copy',2000);
+      const btn = document.getElementById('mp-copy');
+      const inp = document.getElementById('mp-link');
+      // Try clipboard API first, fall back to execCommand
+      const doFallback = () => { inp.select(); document.execCommand('copy'); };
+      (navigator.clipboard
+        ? navigator.clipboard.writeText(mpInviteUrl).catch(doFallback)
+        : Promise.resolve(doFallback())
+      ).then(() => {
+        btn.textContent='✓ Copied!'; btn.style.background='#27ae60';
+        setTimeout(()=>{ btn.textContent='Copy Link'; btn.style.background='#e94560'; }, 3000);
       });
     });
   });
