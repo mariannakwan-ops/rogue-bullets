@@ -1417,6 +1417,11 @@ function showInviteOverlay() {
   inp.value = mpInviteUrl; row.style.display='flex';
 }
 
+function onConnOpen() {
+  document.getElementById('mp-overlay').style.display='none';
+  startGame();
+}
+
 if (joinId) {
   // GUEST: joining via invite link
   mpMode='guest';
@@ -1424,12 +1429,16 @@ if (joinId) {
   mpSetStatus('Joining game...');
   mpPeer = new Peer();
   mpPeer.on('open', () => {
-    const conn = mpPeer.connect(joinId, {reliable:true});
+    const conn = mpPeer.connect(joinId, {reliable:true, serialization:'json'});
     mpSetupConn(conn);
-    conn.on('open', () => {
-      document.getElementById('mp-overlay').style.display='none';
-      startGame();
-    });
+    conn.on('error', e => mpSetStatus('Connection failed. Ask your friend for a fresh link.'));
+    // Guard: conn may already be open by the time handler registers
+    if (conn.open) { onConnOpen(); } else { conn.on('open', onConnOpen); }
+    // Timeout: if not connected in 12s, show helpful message
+    const t = setTimeout(() => {
+      if (!conn.open) mpSetStatus("Still waiting… make sure your friend's game tab is open and try a fresh link.");
+    }, 12000);
+    conn.on('open', () => clearTimeout(t));
   });
   mpPeer.on('error', e => {
     if (e.type === 'peer-unavailable') {
@@ -1453,10 +1462,9 @@ if (joinId) {
   });
   mpPeer.on('connection', conn => {
     mpSetupConn(conn);
-    conn.on('open', () => {
-      document.getElementById('mp-overlay').style.display='none';
-      startGame();
-    });
+    conn.on('error', e => console.warn('PeerJS conn error:', e));
+    // Guard: connection event may fire after conn is already open
+    if (conn.open) { onConnOpen(); } else { conn.on('open', onConnOpen); }
   });
   mpPeer.on('error', e => console.warn('PeerJS:', e.type));
 }
