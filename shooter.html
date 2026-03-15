@@ -11,17 +11,6 @@ canvas { cursor: none; display: block; }
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="mp-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.92);flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#eee;font-family:monospace;z-index:999">
-  <div style="font-size:2rem;color:#e94560;letter-spacing:2px">MULTIPLAYER</div>
-  <div id="mp-status" style="color:#a8dadc;font-size:1rem;text-align:center;max-width:480px">Connecting...</div>
-  <div id="mp-link-row" style="display:none;flex-direction:column;align-items:center;gap:8px">
-    <input id="mp-link" readonly onclick="this.select()" style="background:#16213e;border:1px solid #0f3460;color:#fff;padding:8px 12px;border-radius:6px;font-size:0.8rem;width:460px;cursor:text">
-    <button id="mp-copy" style="padding:8px 28px;border:none;border-radius:6px;background:#e94560;color:#fff;cursor:pointer;font-size:1rem;font-weight:bold">Copy Link</button>
-    <div style="color:#f39c12;font-size:0.75rem">⚠ This link expires if you refresh — send it now!</div>
-  </div>
-  <button id="mp-solo" style="margin-top:4px;padding:8px 24px;border:none;border-radius:8px;background:#555;color:#eee;cursor:pointer;font-size:0.9rem">Play Solo Instead</button>
-</div>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 // ─── CANVAS SETUP ────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
@@ -78,11 +67,6 @@ canvas.addEventListener('mousedown', e => {
   const r = canvas.getBoundingClientRect();
   const cx = (e.clientX - r.left) * (W / r.width);
   const cy = (e.clientY - r.top)  * (H / r.height);
-  // Invite button
-  const ib = gameState._inviteBtn;
-  if (ib && cx>=ib.x && cx<=ib.x+ib.w && cy>=ib.y && cy<=ib.y+ib.h) {
-    showInviteOverlay(); return;
-  }
   // Check music button clicks
   const btns = gameState._musicBtns;
   if (btns) {
@@ -97,74 +81,6 @@ canvas.addEventListener('mousedown', e => {
 });
 canvas.addEventListener('mouseup',   e => { if (e.button===0) input.down=false; });
 window.addEventListener('keypress',  e => { input.clicked = true; });
-
-// ─── MULTIPLAYER ─────────────────────────────────────────────────────────────
-const joinId = new URLSearchParams(location.search).get('join');
-let mpMode = 'solo';   // 'solo' | 'host' | 'guest'
-let mpConn = null;
-let mpPeer = null;
-let guestInput = { keys: {}, mx: W/2, my: H/2, down: false }; // host stores guest's input here
-let syncTick = 0;
-
-function mpSetStatus(msg) { document.getElementById('mp-status').textContent = msg; }
-
-function mpSetupConn(conn) {
-  mpConn = conn;
-  conn.on('data', msg => {
-    if (mpMode === 'host' && msg.type === 'input') {
-      guestInput = msg;
-    }
-    if (mpMode === 'guest' && msg.type === 'state') {
-      applyNetState(msg);
-    }
-  });
-  conn.on('close', () => {
-    mpSetStatus('Opponent disconnected.');
-    document.getElementById('mp-overlay').style.display = 'flex';
-  });
-}
-
-function serializeState() {
-  const sp = p => !p ? null : {x:p.x,y:p.y,angle:p.angle,health:p.health,alive:p.alive,
-    walkCycle:p.walkCycle,hitFlashTimer:p.hitFlashTimer,invincibleTimer:p.invincibleTimer,
-    muzzleFlashTimer:p.muzzleFlashTimer,deathTimer:p.deathTimer};
-  return {
-    type:'state',
-    p1: sp(player), p2: sp(player2),
-    enemies: enemies.map(e=>({x:e.x,y:e.y,angle:e.angle,type:e.type,health:e.health,
-      maxHealth:e.maxHealth,alive:e.alive,deathTimer:e.deathTimer,hitFlashTimer:e.hitFlashTimer,
-      wobble:e.wobble,aggroShown:e.aggroShown,state:e.state})),
-    bullets: bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy,fromPlayer:b.fromPlayer,alive:b.alive,trail:b.trail})),
-    gs:{current:gameState.current,level:gameState.level,score:gameState.score,
-        spawnLen:gameState.spawnQueue.length,highScore:gameState.highScore,
-        levelCompleteTimer:gameState.levelCompleteTimer,overlayAlpha:gameState.overlayAlpha}
-  };
-}
-
-function applyNetState(msg) {
-  const ap = (p, data) => {
-    if (!data || !p) return;
-    Object.assign(p, data);
-  };
-  ap(player, msg.p1); ap(player2, msg.p2);
-  // sync enemies
-  while (enemies.length < msg.enemies.length) enemies.push(new Enemy(0,0,'grunt'));
-  enemies.length = msg.enemies.length;
-  msg.enemies.forEach((d,i) => { if (!enemies[i]) enemies[i]=new Enemy(0,0,d.type); Object.assign(enemies[i],d); });
-  // sync bullets
-  while (bullets.length < msg.bullets.length) bullets.push(new Bullet(0,0,0,0,true));
-  bullets.length = msg.bullets.length;
-  msg.bullets.forEach((d,i) => { if (!bullets[i]) bullets[i]=new Bullet(0,0,0,0,d.fromPlayer); Object.assign(bullets[i],d); });
-  // sync game state
-  if (msg.gs) {
-    gameState.current = msg.gs.current;
-    gameState.level   = msg.gs.level;
-    gameState.score   = msg.gs.score;
-    gameState.highScore = msg.gs.highScore;
-    gameState.levelCompleteTimer = msg.gs.levelCompleteTimer;
-    gameState.overlayAlpha = msg.gs.overlayAlpha;
-  }
-}
 
 // ─── AUDIO ───────────────────────────────────────────────────────────────────
 const sfx = (() => {
@@ -685,23 +601,20 @@ class Player {
     ctx.beginPath(); ctx.ellipse(2,3,13,8,0,0,Math.PI*2); ctx.fill();
     ctx.restore();
 
-    // Legs (P2 = teal/orange palette)
+    // Legs
     const leg = Math.sin(this.walkCycle)*5;
-    const legCol  = this.isP2 ? '#3a2a00' : '#1a3a15';
-    const bodyCol = this.isP2 ? '#c07000' : '#2d6a23';
-    const bodyCol2= this.isP2 ? '#8a5000' : '#245218';
-    ctx.fillStyle = flash ? '#fff' : legCol;
+    ctx.fillStyle = flash ? '#fff' : '#1a3a15';
     ctx.fillRect(-9, -9+leg, 8, 5);
     ctx.fillRect(-9,  4-leg, 8, 5);
 
     // Body
-    ctx.fillStyle = flash ? '#fff' : bodyCol;
+    ctx.fillStyle = flash ? '#fff' : '#2d6a23';
     ctx.fillRect(-10,-10,20,20);
     // Chest detail
     if (!flash) {
-      ctx.fillStyle=bodyCol2;
+      ctx.fillStyle='#245218';
       ctx.fillRect(-7,-7,14,14);
-      ctx.fillStyle=bodyCol;
+      ctx.fillStyle='#2d6a23';
       ctx.fillRect(-5,-5,10,10);
     }
 
@@ -912,10 +825,9 @@ class Enemy {
 }
 
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
-let player, player2, enemies, bullets, particles, scorePopups;
+let player, enemies, bullets, particles, scorePopups;
 const gameState = {
   _musicBtns: {},
-  _inviteBtn: null,
   current: 'start',
   level: 1,
   score: 0,
@@ -945,8 +857,6 @@ function buildSpawnQueue(config) {
 
 function startGame() {
   player = new Player();
-  player2 = (mpMode !== 'solo') ? new Player() : null;
-  if (player2) { player2.x = W/2 + 40; player2.y = H/2 + 40; player2.isP2 = true; }
   enemies = []; bullets = []; particles = []; scorePopups = [];
   gameState.score = 0;
   gameState.level = 1;
@@ -991,17 +901,14 @@ function handleCollisions() {
     } else {
       if (player.alive && circleHit(b,player)) {
         b.alive=false; player.takeDamage(10); spawnHitParticles(b.x,b.y);
-      } else if (player2 && player2.alive && circleHit(b,player2)) {
-        b.alive=false; player2.takeDamage(10); spawnHitParticles(b.x,b.y);
       }
     }
   }
 
   // Enemies vs player (melee)
   for (const e of enemies) {
-    if (!e.alive) continue;
-    if (player.alive && circleHit(e,player)) player.takeDamage(12);
-    if (player2 && player2.alive && circleHit(e,player2)) player2.takeDamage(12);
+    if (!e.alive||!player.alive) continue;
+    if (circleHit(e,player)) player.takeDamage(12);
   }
 
   // Enemy separation
@@ -1024,12 +931,6 @@ function handleCollisions() {
 
 // ─── UPDATE ──────────────────────────────────────────────────────────────────
 function update(dt) {
-  // Guest: don't simulate — just render received state; send input to host
-  if (mpMode === 'guest') {
-    if (mpConn) mpConn.send({type:'input', keys:{...input.keys}, mx:input.mx, my:input.my, down:input.down});
-    input.clicked = false;
-    return;
-  }
   gameState.titleTime+=dt;
 
   if (gameState.current==='start') {
@@ -1072,21 +973,6 @@ function update(dt) {
   }
 
   player.update(dt);
-
-  // Player2 update (host applies received guest input)
-  if (player2) {
-    const gi = guestInput;
-    const savedInput = {...input};
-    input.keys = gi.keys || {}; input.mx = gi.mx ?? W/2; input.my = gi.my ?? H/2; input.down = gi.down ?? false;
-    player2.update(dt);
-    Object.assign(input, savedInput);
-  }
-
-  // Broadcast state to guest every 3 ticks (~20fps)
-  if (mpMode === 'host' && mpConn) {
-    syncTick++;
-    if (syncTick % 3 === 0) mpConn.send(serializeState());
-  }
 
   for (const e of enemies) e.update(dt, player);
   for (const b of bullets) b.update(dt);
@@ -1165,16 +1051,7 @@ function drawHUD() {
   }
   ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(10,12,160,18);
   ctx.fillStyle='#fff'; ctx.font='bold 11px monospace'; ctx.textAlign='left';
-  ctx.fillText(mpMode!=='solo'?`P1  ${player.health}`:`HP  ${player.health} / ${player.maxHealth}`, 16, 25);
-  // P2 health bar in multiplayer
-  if(mpMode!=='solo' && player2) {
-    const hp2=player2.health/player2.maxHealth;
-    ctx.fillStyle='#1a1a1a'; ctx.fillRect(180,12,130,18);
-    ctx.fillStyle=hp2>0.6?'#f39c12':hp2>0.3?'#e67e22':'#e74c3c';
-    ctx.fillRect(180,12,130*hp2,18);
-    ctx.strokeStyle='#444'; ctx.lineWidth=1; ctx.strokeRect(180,12,130,18);
-    ctx.fillStyle='#fff'; ctx.fillText(`P2  ${player2.health}`,186,25);
-  }
+  ctx.fillText(`HP  ${player.health} / ${player.maxHealth}`, 16, 25);
 
   // Level
   ctx.fillStyle='#00e5ff'; ctx.font='bold 17px monospace'; ctx.textAlign='center';
@@ -1266,17 +1143,6 @@ function drawStartScreen() {
     ctx.fillText(`HIGH SCORE: ${gameState.highScore}`, W/2, H/2+90);
   }
 
-  // Invite friend button (host on GitHub Pages)
-  if (mpMode==='host' && mpInviteUrl) {
-    const lbl='♥ INVITE A FRIEND';
-    ctx.font='bold 13px monospace';
-    const bw=ctx.measureText(lbl).width+24, bh=28;
-    const bx=W/2-bw/2, by=H/2+118;
-    ctx.fillStyle='#16213e'; ctx.strokeStyle='#e94560'; ctx.lineWidth=1.5;
-    ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,6); ctx.fill(); ctx.stroke();
-    ctx.fillStyle='#e94560'; ctx.fillText(lbl,W/2,by+19);
-    gameState._inviteBtn={x:bx,y:by,w:bw,h:bh};
-  }
   ctx.textAlign='left';
 }
 
@@ -1358,17 +1224,8 @@ function draw() {
   for(const e of enemies) if(e.alive) e.draw(ctx);
   for(const e of enemies) if(!e.alive) e.draw(ctx);
 
-  // Players
+  // Player
   if(player) player.draw(ctx);
-  if(player2) player2.draw(ctx);
-  // P1/P2 labels in multiplayer
-  if(mpMode!=='solo' && player && player2) {
-    [[player,'P1','#2ecc71'],[player2,'P2','#f39c12']].forEach(([p,lbl,col])=>{
-      if(!p.alive) return;
-      ctx.save(); ctx.fillStyle=col; ctx.font='bold 10px monospace'; ctx.textAlign='center';
-      ctx.fillText(lbl,p.x,p.y-p.radius-6); ctx.restore();
-    });
-  }
 
   // Front particles
   particles.filter(p=>p.type!=='smoke'&&p.type!=='blood').forEach(p=>p.draw(ctx));
@@ -1399,84 +1256,7 @@ function loop(ts) {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 particles=[]; scorePopups=[]; bullets=[]; enemies=[];
-player=null; player2=null;
-
-let mpInviteUrl = null; // set once PeerJS is ready on host
-
-document.getElementById('mp-solo').addEventListener('click', () => {
-  mpMode='solo';
-  document.getElementById('mp-overlay').style.display='none';
-  if (gameState.current !== 'playing') startGame();
-});
-
-function showInviteOverlay() {
-  if (!mpInviteUrl) return;
-  document.getElementById('mp-overlay').style.display='flex';
-  mpSetStatus('Share this link with a friend:');
-  const row = document.getElementById('mp-link-row');
-  const inp = document.getElementById('mp-link');
-  inp.value = mpInviteUrl; row.style.display='flex'; row.style.flexDirection='column'; row.style.alignItems='center';
-}
-
-function onConnOpen() {
-  document.getElementById('mp-overlay').style.display='none';
-  startGame();
-}
-
-if (joinId) {
-  // GUEST: joining via invite link
-  mpMode='guest';
-  document.getElementById('mp-overlay').style.display='flex';
-  mpSetStatus('Joining game...');
-  mpPeer = new Peer();
-  mpPeer.on('open', () => {
-    const conn = mpPeer.connect(joinId, {reliable:true, serialization:'json'});
-    mpSetupConn(conn);
-    conn.on('error', e => mpSetStatus('Connection failed. Ask your friend for a fresh link.'));
-    // Guard: conn may already be open by the time handler registers
-    if (conn.open) { onConnOpen(); } else { conn.on('open', onConnOpen); }
-    // Timeout: if not connected in 12s, show helpful message
-    const t = setTimeout(() => {
-      if (!conn.open) mpSetStatus("Still waiting… make sure your friend's game tab is open and try a fresh link.");
-    }, 12000);
-    conn.on('open', () => clearTimeout(t));
-  });
-  mpPeer.on('error', e => {
-    if (e.type === 'peer-unavailable') {
-      mpSetStatus("That invite link has expired — ask your friend for a new one.");
-    } else {
-      mpSetStatus('Connection error: ' + e.type);
-    }
-  });
-} else if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-  // HOST on GitHub Pages: prepare PeerJS silently, show invite button on start screen
-  mpMode='host';
-  mpPeer = new Peer();
-  mpPeer.on('open', id => {
-    mpInviteUrl = location.origin + location.pathname + '?join=' + id;
-    document.getElementById('mp-copy').addEventListener('click', () => {
-      const btn = document.getElementById('mp-copy');
-      const inp = document.getElementById('mp-link');
-      // Try clipboard API first, fall back to execCommand
-      const doFallback = () => { inp.select(); document.execCommand('copy'); };
-      (navigator.clipboard
-        ? navigator.clipboard.writeText(mpInviteUrl).catch(doFallback)
-        : Promise.resolve(doFallback())
-      ).then(() => {
-        btn.textContent='✓ Copied!'; btn.style.background='#27ae60';
-        setTimeout(()=>{ btn.textContent='Copy Link'; btn.style.background='#e94560'; }, 3000);
-      });
-    });
-  });
-  mpPeer.on('connection', conn => {
-    mpSetupConn(conn);
-    conn.on('error', e => console.warn('PeerJS conn error:', e));
-    // Guard: connection event may fire after conn is already open
-    if (conn.open) { onConnOpen(); } else { conn.on('open', onConnOpen); }
-  });
-  mpPeer.on('error', e => console.warn('PeerJS:', e.type));
-}
-
+player=null;
 requestAnimationFrame(ts=>{ lastT=ts; requestAnimationFrame(loop); });
 </script>
 </body>
