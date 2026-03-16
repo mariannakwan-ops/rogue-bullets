@@ -646,7 +646,7 @@ class Player {
     this.muzzleFlashTimer=Math.max(0, this.muzzleFlashTimer-dt);
     this.hitFlashTimer  = Math.max(0, this.hitFlashTimer  - dt);
 
-    if (input.down && this.shootCooldown <= 0) {
+    if ((input.down || input.keys['Space']) && this.shootCooldown <= 0) {
       this.shoot();
     }
   }
@@ -1194,6 +1194,7 @@ const gameState = {
   level: 1,
   score: 0,
   highScore: parseInt(localStorage.getItem('rogue_hs'))||0,
+  leaderboard: JSON.parse(localStorage.getItem('rogue_lb')||'[]'),
   credits: parseInt(localStorage.getItem('rogue_cr'))||0,
   ownedWeapons: ['blaster'],
   spawnQueue: [],
@@ -1470,6 +1471,13 @@ function update(dt) {
     if (gameState.score>gameState.highScore) {
       gameState.highScore=gameState.score;
       localStorage.setItem('rogue_hs',gameState.highScore);
+    }
+    if (gameState.score>0) {
+      const entry={score:gameState.score, level:gameState.level, date:new Date().toLocaleDateString()};
+      gameState.leaderboard.push(entry);
+      gameState.leaderboard.sort((a,b)=>b.score-a.score);
+      gameState.leaderboard=gameState.leaderboard.slice(0,5);
+      localStorage.setItem('rogue_lb',JSON.stringify(gameState.leaderboard));
     }
     gameState.current='gameOver';
     sfx.gameOver();
@@ -1789,13 +1797,18 @@ function drawLobby() {
   ctx.fillText('▶  LAUNCH MISSION', W/2, by+28);
   gameState._lobbyLaunch={x:bx,y:by,w:bw,h:bh};
 
-  // High score + controls
-  if(gameState.highScore>0) {
-    ctx.fillStyle='#f1c40f'; ctx.font='13px monospace'; ctx.textAlign='center';
-    ctx.fillText(`HIGH SCORE: ${gameState.highScore}`, W/2, 468);
+  // Leaderboard
+  const lb = gameState.leaderboard;
+  if (lb.length>0) {
+    ctx.fillStyle='#f1c40f'; ctx.font='bold 12px monospace'; ctx.textAlign='center';
+    ctx.fillText('★  HIGH SCORES  ★', W/2, 468);
+    lb.forEach((e,i)=>{
+      ctx.fillStyle=i===0?'#f1c40f':'#666'; ctx.font='11px monospace';
+      ctx.fillText(`${i+1}. ${e.score.toLocaleString()}  ·  LVL ${e.level}  ·  ${e.date}`, W/2, 484+i*15);
+    });
   }
-  ctx.fillStyle='#444'; ctx.font='11px monospace';
-  ctx.fillText('WASD · MOUSE AIM · CLICK SHOOT', W/2, 488);
+  ctx.fillStyle='#333'; ctx.font='11px monospace';
+  ctx.fillText('WASD · MOUSE AIM · CLICK / SPACE SHOOT', W/2, lb.length>0?484+lb.length*15+8:472);
   ctx.textAlign='left';
 }
 
