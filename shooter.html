@@ -618,6 +618,59 @@ class ScorePopup {
   }
 }
 
+// ─── PICKUP ITEMS ─────────────────────────────────────────────────────────────
+const PICKUP_TYPES = {
+  health: { color:'#2ecc71', glow:'#00ff88', label:'+25 HP',   radius:10 },
+  shield: { color:'#00bcd4', glow:'#00e5ff', label:'SHIELD',   radius:10 },
+  speed:  { color:'#f1c40f', glow:'#ffee00', label:'SPEED UP', radius:10 },
+};
+
+class PickupItem {
+  constructor(x, y, type) {
+    this.x=x; this.y=y; this.type=type;
+    this.radius=10; this.life=12.0; // 12 seconds before it disappears
+    this.pulse=Math.random()*Math.PI*2; // random start phase
+    this.alive=true;
+  }
+  update(dt) {
+    this.pulse+=dt*3;
+    this.life-=dt;
+    if (this.life<=0) this.alive=false;
+  }
+  draw(ctx) {
+    if (!this.alive) return;
+    const info = PICKUP_TYPES[this.type];
+    const glow = 0.5+0.5*Math.sin(this.pulse);
+    const r = this.radius + glow*3;
+    ctx.save();
+    // Glow ring
+    ctx.globalAlpha=0.35+0.25*glow;
+    ctx.fillStyle=info.glow;
+    ctx.beginPath(); ctx.arc(this.x,this.y,r+5,0,Math.PI*2); ctx.fill();
+    // Core orb
+    ctx.globalAlpha=this.life<2 ? this.life/2 : 1;
+    ctx.fillStyle=info.color;
+    ctx.beginPath(); ctx.arc(this.x,this.y,r,0,Math.PI*2); ctx.fill();
+    // Icon
+    ctx.fillStyle='#fff'; ctx.font='bold 10px monospace'; ctx.textAlign='center';
+    const icon = this.type==='health' ? '♥' : this.type==='shield' ? '◈' : '⚡';
+    ctx.fillText(icon, this.x, this.y+4);
+    // Fade warning when about to expire
+    if (this.life<3) {
+      ctx.globalAlpha=0.6*Math.abs(Math.sin(this.pulse*2));
+      ctx.strokeStyle='#fff'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(this.x,this.y,r+3,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function spawnPickup(x, y, type) {
+  // Small random scatter so items don't stack
+  const a=Math.random()*Math.PI*2, d=rand(0,18);
+  pickups.push(new PickupItem(x+Math.cos(a)*d, y+Math.sin(a)*d, type));
+}
+
 // ─── PLAYER ──────────────────────────────────────────────────────────────────
 class Player {
   constructor() {
@@ -641,8 +694,9 @@ class Player {
     const dy = (input.keys['ArrowDown'] ||input.keys['KeyS']?1:0) - (input.keys['ArrowUp']  ||input.keys['KeyW']?1:0);
     const len = Math.hypot(dx,dy) || 1;
     const moving = dx!==0||dy!==0;
-    this.vx = moving ? (dx/len)*this.speed : 0;
-    this.vy = moving ? (dy/len)*this.speed : 0;
+    const spd = this.speed * (gameState.speedBoostTimer>0 ? 1.6 : 1);
+    this.vx = moving ? (dx/len)*spd : 0;
+    this.vy = moving ? (dy/len)*spd : 0;
     if (moving) this.walkCycle += dt * 8;
     this.x = clamp(this.x + this.vx*dt, PLAYER_RADIUS, W-PLAYER_RADIUS);
     this.y = clamp(this.y + this.vy*dt, PLAYER_RADIUS, H-PLAYER_RADIUS);
@@ -919,6 +973,39 @@ class Enemy {
       scorePopups.push(new ScorePopup(this.x,this.y-20,this.score));
       gameState.score+=this.score;
       sfx.explosion(this.type==='at_st'||this.isBoss);
+
+      // ── Kill streak tracking ──
+      const now = gameState.titleTime;
+      if (now - gameState.lastKillTime < 1.5) {
+        gameState.killStreak = (gameState.killStreak||0) + 1;
+      } else {
+        gameState.killStreak = 1;
+      }
+      gameState.lastKillTime = now;
+      // Streak health rewards
+      if (gameState.killStreak===3) {
+        player.health=Math.min(player.maxHealth, player.health+10);
+        scorePopups.push(new ScorePopup(player.x, player.y-30, '🔥 x3 STREAK +10HP'));
+      } else if (gameState.killStreak===5) {
+        player.health=Math.min(player.maxHealth, player.health+20);
+        scorePopups.push(new ScorePopup(player.x, player.y-30, '🔥 x5 STREAK +20HP'));
+      } else if (gameState.killStreak>=7 && gameState.killStreak%2===1) {
+        player.health=Math.min(player.maxHealth, player.health+30);
+        scorePopups.push(new ScorePopup(player.x, player.y-30, `🔥 x${gameState.killStreak} STREAK +30HP`));
+      }
+
+      // ── Item drops ──
+      if (this.isBoss) {
+        // Boss always drops a health pack + shield
+        spawnPickup(this.x, this.y, 'health');
+        spawnPickup(this.x+30, this.y, 'shield');
+      } else {
+        const roll = Math.random();
+        if (roll < 0.12)      spawnPickup(this.x, this.y, 'health');
+        else if (roll < 0.20) spawnPickup(this.x, this.y, 'shield');
+        else if (roll < 0.26) spawnPickup(this.x, this.y, 'speed');
+      }
+
       if (this.isBoss) {
         gameState.bossKilled=true;
         // short delay before weapon select
@@ -1153,7 +1240,7 @@ class Enemy {
 }
 
 // ─── GAME STATE ──────────────────────────────────────────────────────────────
-let player, player2, enemies, bullets, particles, scorePopups;
+let player, player2, enemies, bullets, particles, scorePopups, pickups;
 const gameState = {
   _musicBtns: {},
   current: 'start',
@@ -1194,10 +1281,14 @@ function startGame() {
   player = new Player();
   player2 = (mpMode !== 'solo') ? new Player() : null;
   if (player2) { player2.x = W/2 + 40; player2.y = H/2 + 40; player2.isP2 = true; }
-  enemies = []; bullets = []; particles = []; scorePopups = [];
+  enemies = []; bullets = []; particles = []; scorePopups = []; pickups = [];
   gameState.score = 0;
   gameState.level = 1;
   gameState.weapon = 'blaster';
+  gameState.killStreak = 0;
+  gameState.lastKillTime = 0;
+  gameState.shieldTimer = 0;
+  gameState.speedBoostTimer = 0;
   startLevel();
   gameState.current = 'playing';
 }
@@ -1210,7 +1301,7 @@ function startLevel() {
   gameState.bossActive = false;
   gameState.bossKilled = false;
   gameState.hasBoss = cfg.boss || false;
-  bullets = [];
+  bullets = []; pickups = [];
   player.x = W/2; player.y = H/2;
   // Set landscape every 3 levels
   const themes = ['space','tatooine','endor','hoth'];
@@ -1300,6 +1391,27 @@ function handleCollisions() {
     if (!e.alive) continue;
     if (player.alive && circleHit(e,player)) player.takeDamage(12);
     if (player2 && player2.alive && circleHit(e,player2)) player2.takeDamage(12);
+  }
+
+  // Pickups vs player
+  for (const p of pickups) {
+    if (!p.alive) continue;
+    if (player.alive && dist(p, player) < p.radius + player.radius) {
+      p.alive = false;
+      if (p.type==='health') {
+        const gain = Math.min(25, player.maxHealth - player.health);
+        player.health += gain;
+        scorePopups.push(new ScorePopup(player.x, player.y-30, `+${gain} HP`));
+        sfx.playerHit(); // repurpose as pickup chime (short)
+      } else if (p.type==='shield') {
+        gameState.shieldTimer = 4.0;
+        player.invincibleTimer = 4.0;
+        scorePopups.push(new ScorePopup(player.x, player.y-30, 'SHIELD ON!'));
+      } else if (p.type==='speed') {
+        gameState.speedBoostTimer = 6.0;
+        scorePopups.push(new ScorePopup(player.x, player.y-30, 'SPEED UP!'));
+      }
+    }
   }
 
   // Enemy separation
@@ -1402,8 +1514,13 @@ function update(dt) {
     if (syncTick % 3 === 0) mpConn.send(serializeState());
   }
 
+  // Buff timers
+  if (gameState.shieldTimer>0)     gameState.shieldTimer     = Math.max(0, gameState.shieldTimer-dt);
+  if (gameState.speedBoostTimer>0) gameState.speedBoostTimer = Math.max(0, gameState.speedBoostTimer-dt);
+
   for (const e of enemies) e.update(dt, player);
   for (const b of bullets) b.update(dt);
+  for (const p of pickups) p.update(dt);
   particles.forEach(p=>p.update(dt));
   scorePopups.forEach(s=>s.update(dt));
 
@@ -1414,6 +1531,7 @@ function update(dt) {
   enemies=enemies.filter(e=>e.alive||e.deathTimer<ENEMY_DEATH_DURATION);
   particles=particles.filter(p=>p.life>0);
   scorePopups=scorePopups.filter(s=>s.life>0);
+  pickups=pickups.filter(p=>p.alive);
 
   // Check win/lose
   if (!player.alive && player.deathTimer>0.6) {
@@ -1583,6 +1701,27 @@ function drawHUD() {
   const w = WEAPONS[gameState.weapon] || WEAPONS.blaster;
   ctx.fillStyle=w.color; ctx.font='bold 12px monospace'; ctx.textAlign='right';
   ctx.fillText(`⚡ ${w.name}`, W-10, H-10);
+
+  // Active buff indicators (right side, below score)
+  let buffY = 50;
+  if (gameState.shieldTimer>0) {
+    ctx.fillStyle='#00e5ff'; ctx.font='bold 12px monospace'; ctx.textAlign='right';
+    ctx.fillText(`◈ SHIELD  ${gameState.shieldTimer.toFixed(1)}s`, W-10, buffY);
+    buffY+=18;
+  }
+  if (gameState.speedBoostTimer>0) {
+    ctx.fillStyle='#f1c40f'; ctx.font='bold 12px monospace'; ctx.textAlign='right';
+    ctx.fillText(`⚡ SPEED  ${gameState.speedBoostTimer.toFixed(1)}s`, W-10, buffY);
+    buffY+=18;
+  }
+
+  // Kill streak display (left side, below HP bar)
+  if ((gameState.killStreak||0) >= 2) {
+    const streak = gameState.killStreak;
+    const streakColor = streak>=7?'#ff4444':streak>=5?'#ff8800':streak>=3?'#ffdd00':'#aaa';
+    ctx.fillStyle=streakColor; ctx.font='bold 12px monospace'; ctx.textAlign='left';
+    ctx.fillText(`🔥 KILL STREAK x${streak}`, 12, 60);
+  }
 
   // Music buttons: [OFF] [LOFI] [ROCK] [KPOP]
   const musicBtns = ['off','lofi','rock','kpop'];
@@ -1804,6 +1943,9 @@ function draw() {
     return;
   }
 
+  // Pickups (drawn behind entities)
+  for (const p of pickups) p.draw(ctx);
+
   // Back particles (blood, smoke behind entities)
   particles.filter(p=>p.type==='smoke'||p.type==='blood').forEach(p=>p.draw(ctx));
 
@@ -1855,7 +1997,7 @@ function loop(ts) {
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
-particles=[]; scorePopups=[]; bullets=[]; enemies=[];
+particles=[]; scorePopups=[]; bullets=[]; enemies=[]; pickups=[];
 player=null; player2=null;
 
 document.getElementById('mp-solo').addEventListener('click', () => {
