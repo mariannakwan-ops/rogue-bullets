@@ -172,7 +172,13 @@ function applyNetState(msg) {
     if (!data || !p) return;
     Object.assign(p, data);
   };
-  ap(player, msg.p1); ap(player2, msg.p2);
+  if (mpMode === 'guest') {
+    ap(player, msg.p2);
+    ap(player2, msg.p1);
+  } else {
+    ap(player, msg.p1);
+    ap(player2, msg.p2);
+  }
   // sync enemies
   while (enemies.length < msg.enemies.length) enemies.push(new Enemy(0,0,'grunt'));
   enemies.length = msg.enemies.length;
@@ -1861,7 +1867,18 @@ if (joinId) {
   mpMode='guest';
   document.getElementById('mp-overlay').style.display='flex';
   mpSetStatus('Joining game...');
-  mpPeer = new Peer();
+  mpPeer = new Peer(undefined, {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    }
+  });
+  mpPeer.on('error', err => {
+    console.error('PeerJS error:', err);
+    mpSetStatus('❌ Connection failed: ' + err.type + '. Try refreshing!');
+  });
   mpPeer.on('open', () => {
     const conn = mpPeer.connect(joinId, {reliable:true});
     mpSetupConn(conn);
@@ -1870,18 +1887,34 @@ if (joinId) {
       startGame();
     });
   });
-  mpPeer.on('error', e => mpSetStatus('Connection error: '+e.type));
+  // error handler moved above open handler (guest block)
 } else if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
   // HOST: only show multiplayer lobby on hosted URLs (GitHub Pages), not local
   mpMode='host';
   document.getElementById('mp-overlay').style.display='flex';
-  mpPeer = new Peer();
+  mpPeer = new Peer(undefined, {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    }
+  });
+  mpPeer.on('error', err => {
+    console.error('PeerJS error:', err);
+    mpSetStatus('❌ Connection failed: ' + err.type + '. Try refreshing!');
+  });
   mpPeer.on('open', id => {
     const url = location.origin + location.pathname + '?join=' + id;
     mpSetStatus('Share this link with a friend:');
     const row = document.getElementById('mp-link-row');
     const inp = document.getElementById('mp-link');
     inp.value = url; row.style.display='flex';
+    setTimeout(() => {
+      if (mpMode === 'host' && !mpConn) {
+        mpSetStatus('⏳ Still waiting for player 2... Share the link above!');
+      }
+    }, 15000);
     document.getElementById('mp-copy').addEventListener('click', () => {
       navigator.clipboard.writeText(url).then(() => {
         document.getElementById('mp-copy').textContent='Copied!';
@@ -1896,7 +1929,7 @@ if (joinId) {
       startGame();
     });
   });
-  mpPeer.on('error', e => mpSetStatus('Error: '+e.type));
+  // error handler registered above (host block)
 }
 // Local: just play solo, no overlay
 requestAnimationFrame(ts=>{ lastT=ts; requestAnimationFrame(loop); });
